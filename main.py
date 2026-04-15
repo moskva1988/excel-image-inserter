@@ -105,17 +105,44 @@ class InsertWorker(QThread):
             row_offset = i // cols
             col_offset = i % cols
 
-            cell_col = start_col_idx + col_offset
-            cell_row = start_row + row_offset
-
-            cell_ref = f"{get_column_letter(cell_col)}{cell_row}"
+            img_w_px = xl_img.width
+            img_h_px = xl_img.height
 
             if p["placement"] == "in_cell":
-                # Adjust cell size to fit image
+                cell_col = start_col_idx + col_offset
+                cell_row = start_row + row_offset
                 ws.column_dimensions[get_column_letter(cell_col)].width = w_cm * 4.8
                 ws.row_dimensions[cell_row].height = h_cm * 28.35
+                cell_ref = f"{get_column_letter(cell_col)}{cell_row}"
+                ws.add_image(xl_img, cell_ref)
+            else:
+                # "Over cells" — space images using dedicated columns/rows
+                # Each image gets its own column (width = image width)
+                # and its own row (height = image height)
+                # Gap columns/rows separate them
+                gap_col_width = 1.5  # ~0.4 cm gap
+                gap_row_height = 8   # ~3 mm gap
 
-            ws.add_image(xl_img, cell_ref)
+                # Column index: start + col_offset * 2 (image col + gap col)
+                img_col = start_col_idx + col_offset * 2
+                # Row index: start + row_offset * 2 (image row + gap row)
+                img_row = start_row + row_offset * 2
+
+                # Set column width for image column (Excel width ≈ pixels / 7.5)
+                ws.column_dimensions[get_column_letter(img_col)].width = img_w_px / 7.5
+                # Set gap column width
+                if col_offset < cols - 1:
+                    gap_col = img_col + 1
+                    ws.column_dimensions[get_column_letter(gap_col)].width = gap_col_width
+
+                # Set row height for image row (Excel height in points ≈ pixels * 0.75)
+                ws.row_dimensions[img_row].height = img_h_px * 0.75
+                # Set gap row height
+                gap_row = img_row + 1
+                ws.row_dimensions[gap_row].height = gap_row_height
+
+                cell_ref = f"{get_column_letter(img_col)}{img_row}"
+                ws.add_image(xl_img, cell_ref)
             self.progress.emit(int((i + 1) / total * 100))
 
         save_path = p["save_path"] or p["excel_path"]
