@@ -134,30 +134,19 @@ class InsertWorker(QThread):
                 ws.row_dimensions[cell_row].height = h_cm * 28.35
                 ws.add_image(xl_img, f"{get_column_letter(cell_col)}{cell_row}")
             else:
-                # "Over cells" — place images using pixel offsets, never resize cells
+                # "Over cells" — place images using EMU offsets from cell A1
                 gap_h = p.get("gap_h_px", 10)
                 gap_v = p.get("gap_v_px", 10)
-                x_px = int(col_offset * (img_w_px + gap_h))
-                y_px = int(row_offset * (img_h_px + gap_v))
+                x_emu = int(col_offset * (pixels_to_EMU(img_w_px) + pixels_to_EMU(gap_h)))
+                y_emu = int(row_offset * (pixels_to_EMU(img_h_px) + pixels_to_EMU(gap_v)))
                 emu_w = pixels_to_EMU(img_w_px)
                 emu_h = pixels_to_EMU(img_h_px)
-                # Calculate which cell + offset for x
+                # Anchor to start cell with full EMU offset (no cell-size guessing)
                 col_i = start_col_idx - 1  # 0-based
-                remaining_x = x_px
-                # Default Excel column width ~64px, row height ~20px
-                default_col_px = 64
-                default_row_px = 20
-                while remaining_x > default_col_px:
-                    remaining_x -= default_col_px
-                    col_i += 1
                 row_i = start_row - 1  # 0-based
-                remaining_y = y_px
-                while remaining_y > default_row_px:
-                    remaining_y -= default_row_px
-                    row_i += 1
                 marker = AnchorMarker(
-                    col=col_i, colOff=pixels_to_EMU(remaining_x),
-                    row=row_i, rowOff=pixels_to_EMU(remaining_y),
+                    col=col_i, colOff=x_emu,
+                    row=row_i, rowOff=y_emu,
                 )
                 anchor = OneCellAnchor(
                     _from=marker,
