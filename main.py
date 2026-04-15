@@ -517,9 +517,19 @@ class MainWindow(QMainWindow):
         self.btn_remove_img.clicked.connect(self._remove_selected)
         self.btn_clear_img = QPushButton("Clear")
         self.btn_clear_img.clicked.connect(self._clear_images)
+        self.btn_move_up = QPushButton("\u25B2")
+        self.btn_move_up.setMaximumWidth(28)
+        self.btn_move_up.setToolTip("Move up")
+        self.btn_move_up.clicked.connect(lambda: self._move_selected(-1))
+        self.btn_move_down = QPushButton("\u25BC")
+        self.btn_move_down.setMaximumWidth(28)
+        self.btn_move_down.setToolTip("Move down")
+        self.btn_move_down.clicked.connect(lambda: self._move_selected(1))
         btn_row.addWidget(self.btn_add_img)
         btn_row.addWidget(self.btn_remove_img)
         btn_row.addWidget(self.btn_clear_img)
+        btn_row.addWidget(self.btn_move_up)
+        btn_row.addWidget(self.btn_move_down)
         btn_row.addStretch()
 
         self.btn_view_thumb_list = QPushButton("List")
@@ -544,8 +554,6 @@ class MainWindow(QMainWindow):
         self.tree_list.setIconSize(QSize(48, 48))
         self.tree_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_list.setRootIsDecorated(False)
-        self.tree_list.setDragDropMode(QAbstractItemView.InternalMove)
-        self.tree_list.setDefaultDropAction(Qt.MoveAction)
         self.tree_list.setColumnWidth(0, 56)
         self.tree_list.setColumnWidth(1, 200)
         self.tree_list.setColumnWidth(2, 70)
@@ -555,7 +563,6 @@ class MainWindow(QMainWindow):
         self.tree_list.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tree_list.setMinimumHeight(150)
         self.tree_list.itemClicked.connect(self._on_tree_click)
-        self.tree_list.model().rowsMoved.connect(self._sync_order_from_tree_list)
         lay_img.addWidget(self.tree_list)
 
         # View: Detail list (no thumbnails)
@@ -563,8 +570,6 @@ class MainWindow(QMainWindow):
         self.tree_detail.setHeaderLabels(["File", "Dimensions", "Size", "After", ""])
         self.tree_detail.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_detail.setRootIsDecorated(False)
-        self.tree_detail.setDragDropMode(QAbstractItemView.InternalMove)
-        self.tree_detail.setDefaultDropAction(Qt.MoveAction)
         self.tree_detail.setColumnWidth(0, 220)
         self.tree_detail.setColumnWidth(1, 90)
         self.tree_detail.setColumnWidth(2, 70)
@@ -574,7 +579,6 @@ class MainWindow(QMainWindow):
         self.tree_detail.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree_detail.setMinimumHeight(150)
         self.tree_detail.itemClicked.connect(self._on_tree_detail_click)
-        self.tree_detail.model().rowsMoved.connect(self._sync_order_from_tree_detail)
         self.tree_detail.hide()
         lay_img.addWidget(self.tree_detail)
 
@@ -831,23 +835,29 @@ class MainWindow(QMainWindow):
 
         self._update_count()
 
-    def _sync_order_from_tree_list(self, *_):
-        new_order = []
-        for i in range(self.tree_list.topLevelItemCount()):
-            path = self.tree_list.topLevelItem(i).data(0, Qt.UserRole)
-            if path:
-                new_order.append(path)
-        if new_order:
-            self.image_paths = new_order
-
-    def _sync_order_from_tree_detail(self, *_):
-        new_order = []
-        for i in range(self.tree_detail.topLevelItemCount()):
-            path = self.tree_detail.topLevelItem(i).data(0, Qt.UserRole)
-            if path:
-                new_order.append(path)
-        if new_order:
-            self.image_paths = new_order
+    def _move_selected(self, direction):
+        """Move selected image up (-1) or down (+1)."""
+        # Get selected path from active tree
+        tree = self.tree_list if self.tree_list.isVisible() else self.tree_detail if self.tree_detail.isVisible() else None
+        if not tree:
+            return
+        items = tree.selectedItems()
+        if not items:
+            return
+        path = items[0].data(0, Qt.UserRole)
+        if not path or path not in self.image_paths:
+            return
+        idx = self.image_paths.index(path)
+        new_idx = idx + direction
+        if new_idx < 0 or new_idx >= len(self.image_paths):
+            return
+        self.image_paths[idx], self.image_paths[new_idx] = self.image_paths[new_idx], self.image_paths[idx]
+        self._rebuild_views()
+        # Re-select the moved item
+        for i in range(tree.topLevelItemCount()):
+            if tree.topLevelItem(i).data(0, Qt.UserRole) == path:
+                tree.setCurrentItem(tree.topLevelItem(i))
+                break
 
     def _on_tree_click(self, item, col):
         if col == 4:  # delete column
