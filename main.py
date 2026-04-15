@@ -602,12 +602,14 @@ class MainWindow(QMainWindow):
         self.spin_px_w.setRange(0, 10000)
         self.spin_px_w.setValue(1200)
         self.spin_px_w.setSpecialValueText("Auto")
+        self.spin_px_w.valueChanged.connect(self._on_resize_changed)
         g_r.addWidget(self.spin_px_w, 0, 1)
         g_r.addWidget(QLabel("H:"), 1, 0)
         self.spin_px_h = QSpinBox()
         self.spin_px_h.setRange(0, 10000)
         self.spin_px_h.setValue(0)
         self.spin_px_h.setSpecialValueText("Auto")
+        self.spin_px_h.valueChanged.connect(self._on_resize_changed)
         g_r.addWidget(self.spin_px_h, 1, 1)
         settings_row.addWidget(grp_resize)
 
@@ -636,6 +638,7 @@ class MainWindow(QMainWindow):
         self.combo_crop = QComboBox()
         self.combo_crop.addItems(CROP_PRESETS.keys())
         self.combo_crop.currentTextChanged.connect(self._on_settings_changed)
+        self.combo_crop.currentTextChanged.connect(self._on_resize_changed)
         g_c.addWidget(self.combo_crop)
         g_c.addStretch()
         settings_row.addWidget(grp_crop)
@@ -854,6 +857,10 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_total_size.setText("")
         self._on_settings_changed()
+
+    def _on_resize_changed(self, *_):
+        if self.image_paths:
+            self._rebuild_views()
 
     def _on_settings_changed(self, *_):
         crop_key = self.combo_crop.currentText()
