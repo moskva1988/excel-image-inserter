@@ -201,10 +201,13 @@ class InsertWorker(QThread):
 
 
 # ── Thumbnail stack widget ─────────────────────────────────────────────────────
+CARD_SIZE = THUMB_SIZE + 30  # extra space for info bar
+
+
 class ThumbCard(QWidget):
-    """Single image card with overlay info and delete button."""
-    delete_requested = pyqtSignal(str)  # path
-    selection_toggled = pyqtSignal(str, bool)  # path, selected
+    """Image card: rounded image, white info overlay, white circle delete button."""
+    delete_requested = pyqtSignal(str)
+    selection_toggled = pyqtSignal(str, bool)
 
     def __init__(self, path, orig_mb, est_mb, w, h):
         super().__init__()
@@ -214,92 +217,131 @@ class ThumbCard(QWidget):
         self.img_w = w
         self.img_h = h
         self.selected = False
-        self.setFixedSize(THUMB_SIZE + 10, THUMB_SIZE + 10)
+        self._drag_start = None
+        self.setFixedSize(CARD_SIZE, CARD_SIZE)
         self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.1f} MB → {est_mb:.1f} MB")
 
-        self.pixmap = QPixmap(path).scaled(
-            THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
+        # Create rounded pixmap
+        raw = QPixmap(path).scaled(THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.pixmap = QPixmap(raw.size())
+        self.pixmap.fill(Qt.transparent)
+        pp = QPainter(self.pixmap)
+        pp.setRenderHint(QPainter.Antialiasing)
+        from PyQt5.QtGui import QPainterPath
+        clip = QPainterPath()
+        clip.addRoundedRect(0, 0, raw.width(), raw.height(), 10, 10)
+        pp.setClipPath(clip)
+        pp.drawPixmap(0, 0, raw)
+        pp.end()
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Background
+        # Selection highlight
         if self.selected:
-            p.fillRect(self.rect(), QColor("#2a2a4a"))
-            p.setPen(QPen(QColor("#6366f1"), 2))
-            p.drawRect(1, 1, self.width() - 2, self.height() - 2)
-        else:
-            p.fillRect(self.rect(), QColor("#1a1a2e"))
+            p.setPen(QPen(QColor("#6366f1"), 3))
+            from PyQt5.QtGui import QPainterPath
+            sel_path = QPainterPath()
+            sel_path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, 12, 12)
+            p.drawPath(sel_path)
 
-        # Image centered
+        # Image centered horizontally, top-aligned with padding
         x = (self.width() - self.pixmap.width()) // 2
-        y = (self.height() - self.pixmap.height()) // 2
+        y = 4
         p.drawPixmap(x, y, self.pixmap)
 
-        # Bottom overlay bar
-        bar_h = 16
-        bar_y = self.height() - bar_h - 3
-        p.fillRect(3, bar_y, self.width() - 6, bar_h, QColor(0, 0, 0, 160))
+        # Info bar at bottom — white bg with rounded bottom corners
+        bar_h = 20
+        bar_y = y + self.pixmap.height() - bar_h
+        from PyQt5.QtGui import QPainterPath
+        bar_path = QPainterPath()
+        bar_path.addRoundedRect(x, bar_y, self.pixmap.width(), bar_h, 0, 0)
+        p.fillPath(bar_path, QColor(255, 255, 255, 210))
 
-        p.setFont(QFont("Arial", 7))
-        # Original size — bottom left
-        p.setPen(QColor("#ccc"))
-        p.drawText(6, bar_y, self.width() // 2, bar_h, Qt.AlignLeft | Qt.AlignVCenter,
-                   f"{self.orig_mb:.1f}MB")
-        # Estimated size — bottom right
-        p.setPen(QColor("#22c55e"))
-        p.drawText(self.width() // 2, bar_y, self.width() // 2 - 6, bar_h,
+        p.setFont(QFont("Arial", 8))
+        # Original size — left
+        p.setPen(QColor("#333"))
+        p.drawText(x + 4, bar_y, self.pixmap.width() // 2, bar_h,
+                   Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.1f}MB")
+        # Estimated size — right
+        p.setPen(QColor("#16a34a"))
+        p.drawText(x + self.pixmap.width() // 2, bar_y, self.pixmap.width() // 2 - 4, bar_h,
                    Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.1f}MB")
 
-        # Delete button — top right
-        btn_size = 16
-        bx = self.width() - btn_size - 3
-        by = 3
-        p.fillRect(bx, by, btn_size, btn_size, QColor(200, 0, 0, 180))
-        p.setPen(QColor("#fff"))
+        # Delete button — white circle, top right
+        btn_r = 10
+        bx = x + self.pixmap.width() - btn_r - 4
+        by = y + 4
+        p.setBrush(QColor(255, 255, 255, 220))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPoint(bx + btn_r // 2, by + btn_r // 2), btn_r, btn_r)
+        p.setPen(QColor("#333"))
         p.setFont(QFont("Arial", 9, QFont.Bold))
-        p.drawText(bx, by, btn_size, btn_size, Qt.AlignCenter, "×")
+        p.drawText(bx - btn_r // 2, by - btn_r // 2, btn_r * 2, btn_r * 2, Qt.AlignCenter, "×")
 
         p.end()
 
     def mousePressEvent(self, event):
-        # Check if delete button clicked
-        btn_size = 16
-        bx = self.width() - btn_size - 3
-        by = 3
-        if QRect(bx, by, btn_size, btn_size).contains(event.pos()):
+        # Check delete button
+        x = (self.width() - self.pixmap.width()) // 2
+        btn_r = 10
+        bx = x + self.pixmap.width() - btn_r - 4 + btn_r // 2
+        by = 4 + btn_r // 2
+        if (event.pos().x() - bx) ** 2 + (event.pos().y() - by) ** 2 <= (btn_r + 2) ** 2:
             self.delete_requested.emit(self.path)
             return
-        # Toggle selection
-        self.selected = not self.selected
-        self.selection_toggled.emit(self.path, self.selected)
-        self.update()
+        # Start drag or toggle selection
+        self._drag_start = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start and (event.pos() - self._drag_start).manhattanLength() > 10:
+            from PyQt5.QtCore import QMimeData
+            from PyQt5.QtGui import QDrag
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setText(self.path)
+            drag.setMimeData(mime)
+            drag.setPixmap(self.pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            drag.exec_(Qt.MoveAction)
+            self._drag_start = None
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_start:
+            self.selected = not self.selected
+            self.selection_toggled.emit(self.path, self.selected)
+            self.update()
+        self._drag_start = None
 
 
 class ThumbStackView(QScrollArea):
-    """Flow layout of ThumbCard widgets."""
+    """Flow layout of ThumbCard widgets with drag/drop reorder."""
     delete_requested = pyqtSignal(str)
+    order_changed = pyqtSignal(list)
 
     def __init__(self):
         super().__init__()
         self.setWidgetResizable(True)
+        self.setAcceptDrops(True)
+        self.setStyleSheet("ThumbStackView { background: #1a1a1a; border: 1px solid #333; border-radius: 6px; }")
         self.container = QWidget()
+        self.container.setStyleSheet("background: #1a1a1a;")
+        self.container.setAcceptDrops(True)
         self.flow = FlowLayout(self.container)
-        self.flow.setSpacing(6)
+        self.flow.setSpacing(8)
         self.setWidget(self.container)
         self.cards = []
         self.selected_paths = set()
+        self._paths = []
 
     def set_images(self, paths, max_w, max_h):
-        # Clear old cards completely before adding new ones
         self.flow.clear_widgets()
         for c in self.cards:
             c.setParent(None)
             c.deleteLater()
         self.cards.clear()
         self.selected_paths.clear()
+        self._paths = list(paths)
 
         for path in paths:
             orig_mb, est_mb, w, h = estimate_size(path, max_w, max_h)
@@ -308,7 +350,6 @@ class ThumbStackView(QScrollArea):
             card.selection_toggled.connect(self._on_selection)
             self.cards.append(card)
 
-        # Add all at once after clearing
         self.flow.set_widgets(self.cards)
 
     def _on_delete(self, path):
@@ -322,6 +363,32 @@ class ThumbStackView(QScrollArea):
 
     def get_selected(self):
         return list(self.selected_paths)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        src_path = event.mimeData().text()
+        if src_path not in self._paths:
+            return
+        # Find drop target card
+        drop_pos = self.container.mapFrom(self, event.pos())
+        target_idx = len(self._paths) - 1
+        for i, card in enumerate(self.cards):
+            if card.geometry().contains(drop_pos):
+                target_idx = i
+                break
+        src_idx = self._paths.index(src_path)
+        if src_idx == target_idx:
+            return
+        self._paths.pop(src_idx)
+        self._paths.insert(target_idx, src_path)
+        self.order_changed.emit(list(self._paths))
+        event.acceptProposedAction()
 
 
 class FlowLayout(QVBoxLayout):
@@ -585,6 +652,7 @@ class MainWindow(QMainWindow):
         # View: Thumbnail stack
         self.thumb_stack = ThumbStackView()
         self.thumb_stack.delete_requested.connect(self._delete_by_path)
+        self.thumb_stack.order_changed.connect(self._on_stack_reorder)
         self.thumb_stack.setMinimumHeight(150)
         self.thumb_stack.hide()
         lay_img.addWidget(self.thumb_stack)
@@ -858,6 +926,10 @@ class MainWindow(QMainWindow):
             if tree.topLevelItem(i).data(0, Qt.UserRole) == path:
                 tree.setCurrentItem(tree.topLevelItem(i))
                 break
+
+    def _on_stack_reorder(self, new_order):
+        self.image_paths = new_order
+        self._rebuild_views()
 
     def _on_tree_click(self, item, col):
         if col == 4:  # delete column
