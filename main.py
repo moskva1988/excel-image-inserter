@@ -21,7 +21,10 @@ from PyQt5.QtGui import QPixmap, QIcon, QImage, QPainter, QPen, QColor, QFont, Q
 from PIL import Image as PILImage
 import openpyxl
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -131,16 +134,36 @@ class InsertWorker(QThread):
                 ws.row_dimensions[cell_row].height = h_cm * 28.35
                 ws.add_image(xl_img, f"{get_column_letter(cell_col)}{cell_row}")
             else:
-                gap_col_width = 1.5
-                gap_row_height = 8
-                img_col = start_col_idx + col_offset * 2
-                img_row = start_row + row_offset * 2
-                ws.column_dimensions[get_column_letter(img_col)].width = img_w_px / 7.5
-                if col_offset < cols - 1:
-                    ws.column_dimensions[get_column_letter(img_col + 1)].width = gap_col_width
-                ws.row_dimensions[img_row].height = img_h_px * 0.75
-                ws.row_dimensions[img_row + 1].height = gap_row_height
-                ws.add_image(xl_img, f"{get_column_letter(img_col)}{img_row}")
+                # "Over cells" — place images using pixel offsets, never resize cells
+                gap_px = 10
+                x_px = int(col_offset * (img_w_px + gap_px))
+                y_px = int(row_offset * (img_h_px + gap_px))
+                emu_w = pixels_to_EMU(img_w_px)
+                emu_h = pixels_to_EMU(img_h_px)
+                # Calculate which cell + offset for x
+                col_i = start_col_idx - 1  # 0-based
+                remaining_x = x_px
+                # Default Excel column width ~64px, row height ~20px
+                default_col_px = 64
+                default_row_px = 20
+                while remaining_x > default_col_px:
+                    remaining_x -= default_col_px
+                    col_i += 1
+                row_i = start_row - 1  # 0-based
+                remaining_y = y_px
+                while remaining_y > default_row_px:
+                    remaining_y -= default_row_px
+                    row_i += 1
+                marker = AnchorMarker(
+                    col=col_i, colOff=pixels_to_EMU(remaining_x),
+                    row=row_i, rowOff=pixels_to_EMU(remaining_y),
+                )
+                anchor = OneCellAnchor(
+                    _from=marker,
+                    ext=XDRPositiveSize2D(cx=emu_w, cy=emu_h),
+                )
+                xl_img.anchor = anchor
+                ws.add_image(xl_img)
 
             self.progress.emit(int((i + 1) / total * 100))
 
