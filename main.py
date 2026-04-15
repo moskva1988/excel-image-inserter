@@ -544,6 +544,8 @@ class MainWindow(QMainWindow):
         self.tree_list.setIconSize(QSize(48, 48))
         self.tree_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_list.setRootIsDecorated(False)
+        self.tree_list.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree_list.setDefaultDropAction(Qt.MoveAction)
         self.tree_list.setColumnWidth(0, 56)
         self.tree_list.setColumnWidth(1, 200)
         self.tree_list.setColumnWidth(2, 70)
@@ -553,6 +555,7 @@ class MainWindow(QMainWindow):
         self.tree_list.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tree_list.setMinimumHeight(150)
         self.tree_list.itemClicked.connect(self._on_tree_click)
+        self.tree_list.model().rowsMoved.connect(self._sync_order_from_tree_list)
         lay_img.addWidget(self.tree_list)
 
         # View: Detail list (no thumbnails)
@@ -560,6 +563,8 @@ class MainWindow(QMainWindow):
         self.tree_detail.setHeaderLabels(["File", "Dimensions", "Size", "After", ""])
         self.tree_detail.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tree_detail.setRootIsDecorated(False)
+        self.tree_detail.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree_detail.setDefaultDropAction(Qt.MoveAction)
         self.tree_detail.setColumnWidth(0, 220)
         self.tree_detail.setColumnWidth(1, 90)
         self.tree_detail.setColumnWidth(2, 70)
@@ -569,6 +574,7 @@ class MainWindow(QMainWindow):
         self.tree_detail.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree_detail.setMinimumHeight(150)
         self.tree_detail.itemClicked.connect(self._on_tree_detail_click)
+        self.tree_detail.model().rowsMoved.connect(self._sync_order_from_tree_detail)
         self.tree_detail.hide()
         lay_img.addWidget(self.tree_detail)
 
@@ -597,20 +603,21 @@ class MainWindow(QMainWindow):
         grp_resize = QGroupBox("Resize (px)")
         g_r = QGridLayout(grp_resize)
         g_r.setSpacing(4)
+        resize_presets = ["Auto", "64", "128", "256", "320", "480", "640", "800", "1024", "1200", "1600", "1920", "2048", "3840"]
         g_r.addWidget(QLabel("W:"), 0, 0)
-        self.spin_px_w = QSpinBox()
-        self.spin_px_w.setRange(0, 10000)
-        self.spin_px_w.setValue(1200)
-        self.spin_px_w.setSpecialValueText("Auto")
-        self.spin_px_w.valueChanged.connect(self._on_resize_changed)
-        g_r.addWidget(self.spin_px_w, 0, 1)
+        self.combo_px_w = QComboBox()
+        self.combo_px_w.setEditable(True)
+        self.combo_px_w.addItems(resize_presets)
+        self.combo_px_w.setCurrentText("1200")
+        self.combo_px_w.currentTextChanged.connect(self._on_resize_changed)
+        g_r.addWidget(self.combo_px_w, 0, 1)
         g_r.addWidget(QLabel("H:"), 1, 0)
-        self.spin_px_h = QSpinBox()
-        self.spin_px_h.setRange(0, 10000)
-        self.spin_px_h.setValue(0)
-        self.spin_px_h.setSpecialValueText("Auto")
-        self.spin_px_h.valueChanged.connect(self._on_resize_changed)
-        g_r.addWidget(self.spin_px_h, 1, 1)
+        self.combo_px_h = QComboBox()
+        self.combo_px_h.setEditable(True)
+        self.combo_px_h.addItems(resize_presets)
+        self.combo_px_h.setCurrentText("Auto")
+        self.combo_px_h.currentTextChanged.connect(self._on_resize_changed)
+        g_r.addWidget(self.combo_px_h, 1, 1)
         settings_row.addWidget(grp_resize)
 
         grp_display = QGroupBox("Display (cm)")
@@ -795,8 +802,7 @@ class MainWindow(QMainWindow):
         self._rebuild_views()
 
     def _rebuild_views(self):
-        max_w = self.spin_px_w.value() or None
-        max_h = self.spin_px_h.value() or None
+        max_w, max_h = self._get_resize_px()
 
         # Thumbnail list
         self.tree_list.clear()
@@ -825,6 +831,24 @@ class MainWindow(QMainWindow):
 
         self._update_count()
 
+    def _sync_order_from_tree_list(self, *_):
+        new_order = []
+        for i in range(self.tree_list.topLevelItemCount()):
+            path = self.tree_list.topLevelItem(i).data(0, Qt.UserRole)
+            if path:
+                new_order.append(path)
+        if new_order:
+            self.image_paths = new_order
+
+    def _sync_order_from_tree_detail(self, *_):
+        new_order = []
+        for i in range(self.tree_detail.topLevelItemCount()):
+            path = self.tree_detail.topLevelItem(i).data(0, Qt.UserRole)
+            if path:
+                new_order.append(path)
+        if new_order:
+            self.image_paths = new_order
+
     def _on_tree_click(self, item, col):
         if col == 4:  # delete column
             path = item.data(0, Qt.UserRole)
@@ -849,14 +873,25 @@ class MainWindow(QMainWindow):
         n = len(self.image_paths)
         self.lbl_img_count.setText(f"{n} image{'s' if n != 1 else ''}")
         total_orig = sum(os.path.getsize(p) / (1024 * 1024) for p in self.image_paths if os.path.exists(p))
-        max_w = self.spin_px_w.value() or None
-        max_h = self.spin_px_h.value() or None
+        max_w, max_h = self._get_resize_px()
         total_est = sum(estimate_size(p, max_w, max_h)[1] for p in self.image_paths)
         if total_orig > 0:
             self.lbl_total_size.setText(f"Total: {total_orig:.1f} MB → {total_est:.1f} MB")
         else:
             self.lbl_total_size.setText("")
         self._on_settings_changed()
+
+    def _get_resize_px(self):
+        """Return (w_or_None, h_or_None) from resize combos."""
+        def _parse(combo):
+            txt = combo.currentText().strip()
+            if not txt or txt.lower() == "auto":
+                return None
+            try:
+                return int(txt)
+            except ValueError:
+                return None
+        return _parse(self.combo_px_w), _parse(self.combo_px_h)
 
     def _on_resize_changed(self, *_):
         if self.image_paths:
@@ -909,8 +944,8 @@ class MainWindow(QMainWindow):
             "sheet_new": sheet_new,
             "sheet_name": sheet_name,
             "images": list(self.image_paths),
-            "resize_px_w": self.spin_px_w.value() or None,
-            "resize_px_h": self.spin_px_h.value() or None,
+            "resize_px_w": self._get_resize_px()[0],
+            "resize_px_h": self._get_resize_px()[1],
             "display_w_cm": self.spin_cm_w.value(),
             "display_h_cm": self.spin_cm_h.value(),
             "crop_ratio": crop,
