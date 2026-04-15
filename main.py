@@ -201,11 +201,8 @@ class InsertWorker(QThread):
 
 
 # ── Thumbnail stack widget ─────────────────────────────────────────────────────
-CARD_SIZE = THUMB_SIZE + 30  # extra space for info bar
-
-
 class ThumbCard(QWidget):
-    """Image card: rounded image, white info overlay, white circle delete button."""
+    """Image card: tight fit, no rounded corners, white info overlay, white circle delete."""
     delete_requested = pyqtSignal(str)
     selection_toggled = pyqtSignal(str, bool)
 
@@ -218,77 +215,59 @@ class ThumbCard(QWidget):
         self.img_h = h
         self.selected = False
         self._drag_start = None
-        self.setFixedSize(CARD_SIZE, CARD_SIZE)
-        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.2f} MB → {est_mb:.2f} MB")
 
-        # Create rounded pixmap
-        raw = QPixmap(path).scaled(THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.pixmap = QPixmap(raw.size())
-        self.pixmap.fill(Qt.transparent)
-        pp = QPainter(self.pixmap)
-        pp.setRenderHint(QPainter.Antialiasing)
-        from PyQt5.QtGui import QPainterPath
-        clip = QPainterPath()
-        clip.addRoundedRect(0, 0, raw.width(), raw.height(), 10, 10)
-        pp.setClipPath(clip)
-        pp.drawPixmap(0, 0, raw)
-        pp.end()
+        self.pixmap = QPixmap(path).scaled(
+            THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        # Card fits exactly to pixmap
+        self.setFixedSize(self.pixmap.width(), self.pixmap.height())
+        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.2f} MB → {est_mb:.2f} MB")
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
-        # Selection highlight
+        # Draw image filling entire widget
+        p.drawPixmap(0, 0, self.pixmap)
+
+        # Selection border
         if self.selected:
             p.setPen(QPen(QColor("#6366f1"), 3))
-            from PyQt5.QtGui import QPainterPath
-            sel_path = QPainterPath()
-            sel_path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, 12, 12)
-            p.drawPath(sel_path)
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(1, 1, self.width() - 2, self.height() - 2)
 
-        # Image centered horizontally, top-aligned with padding
-        x = (self.width() - self.pixmap.width()) // 2
-        y = 4
-        p.drawPixmap(x, y, self.pixmap)
-
-        # Info bar at bottom — white bg with rounded bottom corners
-        bar_h = 20
-        bar_y = y + self.pixmap.height() - bar_h
-        from PyQt5.QtGui import QPainterPath
-        bar_path = QPainterPath()
-        bar_path.addRoundedRect(x, bar_y, self.pixmap.width(), bar_h, 0, 0)
-        p.fillPath(bar_path, QColor(255, 255, 255, 210))
+        # Info bar at bottom — white semi-transparent
+        bar_h = 18
+        bar_y = self.height() - bar_h
+        p.fillRect(0, bar_y, self.width(), bar_h, QColor(255, 255, 255, 200))
 
         p.setFont(QFont("Arial", 8))
-        # Original size — left
         p.setPen(QColor("#333"))
-        p.drawText(x + 4, bar_y, self.pixmap.width() // 2, bar_h,
+        p.drawText(4, bar_y, self.width() // 2, bar_h,
                    Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.2f}MB")
-        # Estimated size — right
         p.setPen(QColor("#16a34a"))
-        p.drawText(x + self.pixmap.width() // 2, bar_y, self.pixmap.width() // 2 - 4, bar_h,
+        p.drawText(self.width() // 2, bar_y, self.width() // 2 - 4, bar_h,
                    Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.2f}MB")
 
         # Delete button — white circle, top right
-        btn_r = 10
-        bx = x + self.pixmap.width() - btn_r - 4
-        by = y + 4
+        btn_r = 9
+        cx = self.width() - btn_r - 4
+        cy = btn_r + 4
         p.setBrush(QColor(255, 255, 255, 220))
         p.setPen(Qt.NoPen)
-        p.drawEllipse(QPoint(bx + btn_r // 2, by + btn_r // 2), btn_r, btn_r)
+        p.drawEllipse(QPoint(cx, cy), btn_r, btn_r)
         p.setPen(QColor("#333"))
         p.setFont(QFont("Arial", 9, QFont.Bold))
-        p.drawText(bx - btn_r // 2, by - btn_r // 2, btn_r * 2, btn_r * 2, Qt.AlignCenter, "×")
+        p.drawText(cx - btn_r, cy - btn_r, btn_r * 2, btn_r * 2, Qt.AlignCenter, "×")
 
         p.end()
 
     def mousePressEvent(self, event):
         # Check delete button
-        x = (self.width() - self.pixmap.width()) // 2
-        btn_r = 10
-        bx = x + self.pixmap.width() - btn_r - 4 + btn_r // 2
-        by = 4 + btn_r // 2
-        if (event.pos().x() - bx) ** 2 + (event.pos().y() - by) ** 2 <= (btn_r + 2) ** 2:
+        btn_r = 9
+        cx = self.width() - btn_r - 4
+        cy = btn_r + 4
+        if (event.pos().x() - cx) ** 2 + (event.pos().y() - cy) ** 2 <= (btn_r + 3) ** 2:
             self.delete_requested.emit(self.path)
             return
         # Start drag or toggle selection
@@ -428,7 +407,7 @@ class FlowLayout(QVBoxLayout):
 
         parent = self.parentWidget()
         available_w = parent.width() if parent else 600
-        card_w = THUMB_SIZE + 16
+        card_w = THUMB_SIZE + 10
 
         cols = max(1, available_w // card_w)
         row_lay = None
