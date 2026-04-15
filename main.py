@@ -1062,7 +1062,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     win = MainWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec_())
 
 
