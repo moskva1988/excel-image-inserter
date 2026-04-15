@@ -19,7 +19,7 @@ jobs:
           pip install -r requirements.txt
       - name: Build .app
         run: |
-          pyinstaller --onefile --windowed \
+          pyinstaller --windowed \
             --name "Excel Image Inserter" \
             --icon icon.png \
             main.py
@@ -45,11 +45,14 @@ jobs:
           pip install -r requirements.txt
       - name: Build .exe
         run: |
-          pyinstaller --onefile --windowed --name "ExcelImageInserter" --icon icon.png main.py
+          pyinstaller --windowed --name "ExcelImageInserter" --icon icon.png main.py
+      - name: Zip Windows build
+        run: |
+          Compress-Archive -Path dist/ExcelImageInserter -DestinationPath dist/ExcelImageInserter-Windows.zip
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/ExcelImageInserter.exe
+          path: dist/ExcelImageInserter-Windows.zip
 
   release:
     needs: [build-macos, build-windows]
@@ -70,4 +73,4 @@ jobs:
         with:
           files: |
             artifacts/Excel-Image-Inserter-macOS.zip
-            artifacts/ExcelImageInserter.exe
+            artifacts/ExcelImageInserter-Windows.zip
