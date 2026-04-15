@@ -219,7 +219,7 @@ class ThumbCard(QWidget):
         self.selected = False
         self._drag_start = None
         self.setFixedSize(CARD_SIZE, CARD_SIZE)
-        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.1f} MB → {est_mb:.1f} MB")
+        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.2f} MB → {est_mb:.2f} MB")
 
         # Create rounded pixmap
         raw = QPixmap(path).scaled(THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -263,11 +263,11 @@ class ThumbCard(QWidget):
         # Original size — left
         p.setPen(QColor("#333"))
         p.drawText(x + 4, bar_y, self.pixmap.width() // 2, bar_h,
-                   Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.1f}MB")
+                   Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.2f}MB")
         # Estimated size — right
         p.setPen(QColor("#16a34a"))
         p.drawText(x + self.pixmap.width() // 2, bar_y, self.pixmap.width() // 2 - 4, bar_h,
-                   Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.1f}MB")
+                   Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.2f}MB")
 
         # Delete button — white circle, top right
         btn_r = 10
@@ -880,7 +880,7 @@ class MainWindow(QMainWindow):
         self.tree_list.clear()
         for p in self.image_paths:
             orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
-            item = QTreeWidgetItem(["", Path(p).name, f"{orig_mb:.1f} MB", f"{est_mb:.1f} MB", "×"])
+            item = QTreeWidgetItem(["", Path(p).name, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "×"])
             item.setData(0, Qt.UserRole, p)
             try:
                 px = QPixmap(p).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -894,7 +894,7 @@ class MainWindow(QMainWindow):
         for p in self.image_paths:
             orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
             dim = f"{w}×{h}" if w else "?"
-            item = QTreeWidgetItem([Path(p).name, dim, f"{orig_mb:.1f} MB", f"{est_mb:.1f} MB", "×"])
+            item = QTreeWidgetItem([Path(p).name, dim, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "×"])
             item.setData(0, Qt.UserRole, p)
             self.tree_detail.addTopLevelItem(item)
 
@@ -958,7 +958,7 @@ class MainWindow(QMainWindow):
         max_w, max_h = self._get_resize_px()
         total_est = sum(estimate_size(p, max_w, max_h)[1] for p in self.image_paths)
         if total_orig > 0:
-            self.lbl_total_size.setText(f"Total: {total_orig:.1f} MB → {total_est:.1f} MB")
+            self.lbl_total_size.setText(f"Total: {total_orig:.2f} MB → {total_est:.2f} MB")
         else:
             self.lbl_total_size.setText("")
         self._on_settings_changed()
