@@ -134,19 +134,54 @@ class InsertWorker(QThread):
                 ws.row_dimensions[cell_row].height = h_cm * 28.35
                 ws.add_image(xl_img, f"{get_column_letter(cell_col)}{cell_row}")
             else:
-                # "Over cells" — place images using EMU offsets from cell A1
+                # "Over cells" — place images freely, never resize cells
                 gap_h = p.get("gap_h_px", 10)
                 gap_v = p.get("gap_v_px", 10)
-                x_emu = int(col_offset * (pixels_to_EMU(img_w_px) + pixels_to_EMU(gap_h)))
-                y_emu = int(row_offset * (pixels_to_EMU(img_h_px) + pixels_to_EMU(gap_v)))
+                x_px = col_offset * (img_w_px + gap_h)
+                y_px = row_offset * (img_h_px + gap_v)
                 emu_w = pixels_to_EMU(img_w_px)
                 emu_h = pixels_to_EMU(img_h_px)
-                # Anchor to start cell with full EMU offset (no cell-size guessing)
-                col_i = start_col_idx - 1  # 0-based
-                row_i = start_row - 1  # 0-based
+
+                # Walk columns to find col + colOff
+                # Default Excel col width = 8.43 chars ≈ 64px, but read actual
+                def _col_width_px(ws, col_idx):
+                    """Get column width in pixels."""
+                    letter = get_column_letter(col_idx)
+                    w = ws.column_dimensions[letter].width
+                    if w is None:
+                        w = 8.43  # default
+                    return w * 7 + 5  # Excel formula: chars * 7 + 5 padding
+
+                def _row_height_px(ws, row_idx):
+                    """Get row height in pixels."""
+                    h = ws.row_dimensions[row_idx].height
+                    if h is None:
+                        h = 15  # default
+                    return h * 4 / 3  # points to pixels
+
+                col_i = start_col_idx  # 1-based
+                remaining_x = x_px
+                while remaining_x > 0:
+                    cw = _col_width_px(ws, col_i)
+                    if remaining_x < cw:
+                        break
+                    remaining_x -= cw
+                    col_i += 1
+
+                row_i = start_row  # 1-based
+                remaining_y = y_px
+                while remaining_y > 0:
+                    rh = _row_height_px(ws, row_i)
+                    if remaining_y < rh:
+                        break
+                    remaining_y -= rh
+                    row_i += 1
+
                 marker = AnchorMarker(
-                    col=col_i, colOff=x_emu,
-                    row=row_i, rowOff=y_emu,
+                    col=col_i - 1,  # 0-based for AnchorMarker
+                    colOff=pixels_to_EMU(remaining_x),
+                    row=row_i - 1,  # 0-based for AnchorMarker
+                    rowOff=pixels_to_EMU(remaining_y),
                 )
                 anchor = OneCellAnchor(
                     _from=marker,
