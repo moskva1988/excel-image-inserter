@@ -135,9 +135,10 @@ class InsertWorker(QThread):
                 ws.add_image(xl_img, f"{get_column_letter(cell_col)}{cell_row}")
             else:
                 # "Over cells" — place images using pixel offsets, never resize cells
-                gap_px = p.get("gap_px", 10)
-                x_px = int(col_offset * (img_w_px + gap_px))
-                y_px = int(row_offset * (img_h_px + gap_px))
+                gap_h = p.get("gap_h_px", 10)
+                gap_v = p.get("gap_v_px", 10)
+                x_px = int(col_offset * (img_w_px + gap_h))
+                y_px = int(row_offset * (img_h_px + gap_v))
                 emu_w = pixels_to_EMU(img_w_px)
                 emu_h = pixels_to_EMU(img_h_px)
                 # Calculate which cell + offset for x
@@ -660,11 +661,18 @@ class MainWindow(QMainWindow):
         self.spin_rows.setSpecialValueText("Auto")
         self.spin_rows.valueChanged.connect(self._on_settings_changed)
         g_g.addWidget(self.spin_rows, 1, 1)
-        g_g.addWidget(QLabel("Gap px:"), 2, 0)
-        self.spin_gap = QSpinBox()
-        self.spin_gap.setRange(0, 500)
-        self.spin_gap.setValue(10)
-        g_g.addWidget(self.spin_gap, 2, 1)
+        g_g.addWidget(QLabel("H gap:"), 2, 0)
+        self.spin_gap_h = QSpinBox()
+        self.spin_gap_h.setRange(0, 500)
+        self.spin_gap_h.setValue(10)
+        self.spin_gap_h.setSuffix(" px")
+        g_g.addWidget(self.spin_gap_h, 2, 1)
+        g_g.addWidget(QLabel("V gap:"), 3, 0)
+        self.spin_gap_v = QSpinBox()
+        self.spin_gap_v.setRange(0, 500)
+        self.spin_gap_v.setValue(10)
+        self.spin_gap_v.setSuffix(" px")
+        g_g.addWidget(self.spin_gap_v, 3, 1)
         grid_row.addWidget(grp_grid)
 
         grp_pos = QGroupBox("Position")
@@ -903,7 +911,8 @@ class MainWindow(QMainWindow):
             "start_col": start_col,
             "start_row": self.spin_start_row.value(),
             "placement": "in_cell" if self.combo_placement.currentIndex() == 1 else "over",
-            "gap_px": self.spin_gap.value(),
+            "gap_h_px": self.spin_gap_h.value(),
+            "gap_v_px": self.spin_gap_v.value(),
         }
 
         self.btn_insert.setEnabled(False)
