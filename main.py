@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
     QGroupBox, QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
     QLineEdit, QFileDialog, QListWidget, QListWidgetItem, QAbstractItemView,
     QRadioButton, QButtonGroup, QMessageBox, QProgressBar, QCheckBox,
-    QSplitter, QFrame, QGridLayout, QSizePolicy,
+    QFrame, QGridLayout, QSizePolicy, QStackedWidget,
 )
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt5.QtGui import QPixmap, QIcon, QImage, QPainter, QPen, QColor, QFont
@@ -334,26 +334,63 @@ class MainWindow(QMainWindow):
         lay_img = QVBoxLayout(grp_img)
 
         btn_row = QHBoxLayout()
-        self.btn_add_img = QPushButton("Add Images...")
+        self.btn_add_img = QPushButton("Add...")
         self.btn_add_img.clicked.connect(self._add_images)
-        self.btn_clear_img = QPushButton("Clear All")
-        self.btn_clear_img.clicked.connect(self._clear_images)
-        self.btn_remove_img = QPushButton("Remove Selected")
+        self.btn_remove_img = QPushButton("Remove")
         self.btn_remove_img.clicked.connect(self._remove_selected)
+        self.btn_clear_img = QPushButton("Clear")
+        self.btn_clear_img.clicked.connect(self._clear_images)
         btn_row.addWidget(self.btn_add_img)
         btn_row.addWidget(self.btn_remove_img)
         btn_row.addWidget(self.btn_clear_img)
         btn_row.addStretch()
+
+        # View mode buttons (right side)
+        self.btn_view_thumb = QPushButton("Thumbnails")
+        self.btn_view_detail = QPushButton("Details")
+        self.btn_view_grid = QPushButton("Grid")
+        for b in [self.btn_view_thumb, self.btn_view_detail, self.btn_view_grid]:
+            b.setCheckable(True)
+            b.setMaximumWidth(80)
+            b.setStyleSheet("QPushButton:checked{background:#6366f1;color:#fff;border-radius:4px}")
+        self.btn_view_thumb.setChecked(True)
+        self.btn_view_thumb.clicked.connect(lambda: self._switch_view("thumb"))
+        self.btn_view_detail.clicked.connect(lambda: self._switch_view("detail"))
+        self.btn_view_grid.clicked.connect(lambda: self._switch_view("grid"))
+        btn_row.addWidget(self.btn_view_thumb)
+        btn_row.addWidget(self.btn_view_detail)
+        btn_row.addWidget(self.btn_view_grid)
         lay_img.addLayout(btn_row)
 
+        # Thumbnail list view
         self.list_images = QListWidget()
         self.list_images.setIconSize(QSize(64, 64))
         self.list_images.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.list_images.setDragDropMode(QAbstractItemView.InternalMove)
         lay_img.addWidget(self.list_images)
 
-        self.lbl_img_count = QLabel("0 images selected")
-        lay_img.addWidget(self.lbl_img_count)
+        # Detail list view (with file sizes)
+        self.list_details = QListWidget()
+        self.list_details.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.list_details.setFont(QFont("Courier", 11))
+        self.list_details.hide()
+        lay_img.addWidget(self.list_details)
+
+        # Grid preview view
+        self.grid_preview = GridPreview()
+        self.grid_preview.setMinimumHeight(180)
+        self.grid_preview.hide()
+        lay_img.addWidget(self.grid_preview)
+
+        # Bottom row: count + total size
+        bottom_row = QHBoxLayout()
+        self.lbl_img_count = QLabel("0 images")
+        self.lbl_total_size = QLabel("")
+        self.lbl_total_size.setStyleSheet("color:#999")
+        bottom_row.addWidget(self.lbl_img_count)
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.lbl_total_size)
+        lay_img.addLayout(bottom_row)
 
         root.addWidget(grp_img)
 
@@ -455,19 +492,7 @@ class MainWindow(QMainWindow):
         lay_settings.addWidget(grp_pos)
 
         lay_settings.addStretch()
-
-        # Right: preview
-        preview_w = QWidget()
-        lay_preview = QVBoxLayout(preview_w)
-        lay_preview.setContentsMargins(0, 0, 0, 0)
-        lay_preview.addWidget(QLabel("Grid preview:"))
-        self.grid_preview = GridPreview()
-        lay_preview.addWidget(self.grid_preview, 1)
-
-        splitter.addWidget(settings_w)
-        splitter.addWidget(preview_w)
-        splitter.setSizes([400, 300])
-        root.addWidget(splitter)
+        root.addWidget(settings_w)
 
         # ── Action ─────────────────────────────────────────────────────────
         sep = QFrame()
@@ -522,6 +547,7 @@ class MainWindow(QMainWindow):
         for p in paths:
             if p not in self.image_paths:
                 self.image_paths.append(p)
+                # Thumbnail list item
                 item = QListWidgetItem(Path(p).name)
                 try:
                     px = QPixmap(p).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -530,24 +556,82 @@ class MainWindow(QMainWindow):
                     pass
                 item.setData(Qt.UserRole, p)
                 self.list_images.addItem(item)
+        self._rebuild_details()
         self._update_count()
 
     def _clear_images(self):
         self.list_images.clear()
+        self.list_details.clear()
         self.image_paths.clear()
         self._update_count()
 
     def _remove_selected(self):
-        for item in self.list_images.selectedItems():
-            path = item.data(Qt.UserRole)
-            if path in self.image_paths:
-                self.image_paths.remove(path)
-            self.list_images.takeItem(self.list_images.row(item))
+        # Get selected from whichever list is visible
+        active_list = self.list_images if self.list_images.isVisible() else self.list_details
+        selected_rows = sorted([active_list.row(it) for it in active_list.selectedItems()], reverse=True)
+        for row in selected_rows:
+            if 0 <= row < len(self.image_paths):
+                self.image_paths.pop(row)
+            self.list_images.takeItem(row)
+            self.list_details.takeItem(row)
         self._update_count()
 
+    def _rebuild_details(self):
+        """Rebuild the detail list with file sizes and estimated sizes."""
+        self.list_details.clear()
+        max_w = self.spin_px_w.value() or None
+        max_h = self.spin_px_h.value() or None
+        for p in self.image_paths:
+            size_mb = os.path.getsize(p) / (1024 * 1024)
+            try:
+                img = PILImage.open(p)
+                w, h = img.size
+                # Estimate resized size
+                if max_w or max_h:
+                    ratio = 1.0
+                    if max_w and max_h:
+                        ratio = min(max_w / w, max_h / h)
+                    elif max_w:
+                        ratio = max_w / w
+                    else:
+                        ratio = max_h / h
+                    if ratio < 1:
+                        new_pixels = int(w * ratio) * int(h * ratio)
+                    else:
+                        new_pixels = w * h
+                    # Rough JPEG estimate: ~0.5 bytes/pixel at q90
+                    est_mb = new_pixels * 0.5 / (1024 * 1024)
+                else:
+                    est_mb = size_mb
+                dim_str = f"{w}x{h}"
+                text = f"{Path(p).name:<30} {dim_str:>10}  {size_mb:>6.1f} MB -> {est_mb:>5.1f} MB"
+            except Exception:
+                text = f"{Path(p).name:<30} {'?':>10}  {size_mb:>6.1f} MB"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, p)
+            self.list_details.addItem(item)
+
+    def _switch_view(self, mode):
+        self.btn_view_thumb.setChecked(mode == "thumb")
+        self.btn_view_detail.setChecked(mode == "detail")
+        self.btn_view_grid.setChecked(mode == "grid")
+        self.list_images.setVisible(mode == "thumb")
+        self.list_details.setVisible(mode == "detail")
+        self.grid_preview.setVisible(mode == "grid")
+        if mode == "detail":
+            self._rebuild_details()
+        if mode == "grid":
+            self._on_settings_changed()
+
     def _update_count(self):
-        n = self.list_images.count()
-        self.lbl_img_count.setText(f"{n} image{'s' if n != 1 else ''} selected")
+        n = len(self.image_paths)
+        self.lbl_img_count.setText(f"{n} image{'s' if n != 1 else ''}")
+        # Total original size
+        total_mb = sum(os.path.getsize(p) / (1024 * 1024) for p in self.image_paths if os.path.exists(p))
+        if total_mb > 0:
+            self.lbl_total_size.setText(f"Total: {total_mb:.1f} MB")
+        else:
+            self.lbl_total_size.setText("")
         self._on_settings_changed()
 
     def _on_settings_changed(self, *_):
@@ -556,7 +640,7 @@ class MainWindow(QMainWindow):
         self.grid_preview.update_params(
             cols=self.spin_cols.value(),
             rows=self.spin_rows.value(),
-            count=self.list_images.count(),
+            count=len(self.image_paths),
             crop_ratio=crop,
         )
 
