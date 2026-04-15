@@ -1062,7 +1062,10 @@ def main():
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     win = MainWindow()
-    win.showMaximized()
+    screen = app.primaryScreen().availableGeometry()
+    win.resize(win.minimumSizeHint().width(), screen.height())
+    win.move(screen.x(), screen.y())
+    win.show()
     sys.exit(app.exec_())
 
 
