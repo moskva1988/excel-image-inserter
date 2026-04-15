@@ -135,7 +135,7 @@ class InsertWorker(QThread):
                 ws.add_image(xl_img, f"{get_column_letter(cell_col)}{cell_row}")
             else:
                 # "Over cells" — place images using pixel offsets, never resize cells
-                gap_px = 10
+                gap_px = p.get("gap_px", 10)
                 x_px = int(col_offset * (img_w_px + gap_px))
                 y_px = int(row_offset * (img_h_px + gap_px))
                 emu_w = pixels_to_EMU(img_w_px)
@@ -292,8 +292,10 @@ class ThumbStackView(QScrollArea):
         self.selected_paths = set()
 
     def set_images(self, paths, max_w, max_h):
-        # Clear
+        # Clear old cards completely before adding new ones
+        self.flow.clear_widgets()
         for c in self.cards:
+            c.setParent(None)
             c.deleteLater()
         self.cards.clear()
         self.selected_paths.clear()
@@ -303,8 +305,10 @@ class ThumbStackView(QScrollArea):
             card = ThumbCard(path, orig_mb, est_mb, w, h)
             card.delete_requested.connect(self._on_delete)
             card.selection_toggled.connect(self._on_selection)
-            self.flow.addWidget(card)
             self.cards.append(card)
+
+        # Add all at once after clearing
+        self.flow.set_widgets(self.cards)
 
     def _on_delete(self, path):
         self.delete_requested.emit(path)
@@ -325,12 +329,26 @@ class FlowLayout(QVBoxLayout):
         super().__init__(parent)
         self._widgets = []
 
+    def clear_widgets(self):
+        """Remove all sub-layouts without touching widget ownership."""
+        self._widgets.clear()
+        while self.count():
+            item = self.takeAt(0)
+            if item.layout():
+                while item.layout().count():
+                    item.layout().takeAt(0)
+
+    def set_widgets(self, widgets):
+        """Replace all widgets and relayout."""
+        self._widgets = list(widgets)
+        self._relayout()
+
     def addWidget(self, widget):
         self._widgets.append(widget)
         self._relayout()
 
     def _relayout(self):
-        # Remove old layouts
+        # Remove old sub-layouts
         while self.count():
             item = self.takeAt(0)
             if item.layout():
@@ -642,6 +660,11 @@ class MainWindow(QMainWindow):
         self.spin_rows.setSpecialValueText("Auto")
         self.spin_rows.valueChanged.connect(self._on_settings_changed)
         g_g.addWidget(self.spin_rows, 1, 1)
+        g_g.addWidget(QLabel("Gap px:"), 2, 0)
+        self.spin_gap = QSpinBox()
+        self.spin_gap.setRange(0, 500)
+        self.spin_gap.setValue(10)
+        g_g.addWidget(self.spin_gap, 2, 1)
         grid_row.addWidget(grp_grid)
 
         grp_pos = QGroupBox("Position")
@@ -880,6 +903,7 @@ class MainWindow(QMainWindow):
             "start_col": start_col,
             "start_row": self.spin_start_row.value(),
             "placement": "in_cell" if self.combo_placement.currentIndex() == 1 else "over",
+            "gap_px": self.spin_gap.value(),
         }
 
         self.btn_insert.setEnabled(False)
