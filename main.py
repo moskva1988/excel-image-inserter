@@ -711,9 +711,11 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setSpacing(6)
 
-        # ── Top header with title + About button ──────────────────────────
-        top_header = QHBoxLayout()
-        top_header.addStretch()
+        # ── Excel file ─────────────────────────────────────────────────────
+        # Header row: title + about button on same line
+        file_header = QHBoxLayout()
+        file_header.addWidget(QLabel("<b>Excel File</b>"))
+        file_header.addStretch()
         self.btn_about = QPushButton("?")
         self.btn_about.setFixedSize(24, 24)
         self.btn_about.setToolTip("About")
@@ -723,11 +725,10 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background: palette(midlight); }"
         )
         self.btn_about.clicked.connect(self._show_about)
-        top_header.addWidget(self.btn_about)
-        root.addLayout(top_header)
+        file_header.addWidget(self.btn_about)
+        root.addLayout(file_header)
 
-        # ── Excel file ─────────────────────────────────────────────────────
-        grp_file = QGroupBox("Excel File (.xlsx only)")
+        grp_file = QGroupBox()
         lay_file = QVBoxLayout(grp_file)
         lay_file.setSpacing(4)
 
