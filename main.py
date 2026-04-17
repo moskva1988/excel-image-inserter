@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
     QRadioButton, QButtonGroup, QMessageBox, QProgressBar, QCheckBox,
     QFrame, QGridLayout, QSizePolicy, QScrollArea, QToolTip,
     QTreeWidget, QTreeWidgetItem, QHeaderView, QProgressDialog,
-    QInputDialog,
+    QInputDialog, QMenu,
 )
 from PyQt5.QtCore import Qt, QSize, QThread, pyqtSignal, QRect, QPoint, QTimer
 from PyQt5.QtGui import QPixmap, QIcon, QImage, QPainter, QPen, QColor, QFont, QBrush
@@ -26,11 +26,11 @@ from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.units import pixels_to_EMU
-from openpyxl.styles import Font as XLFont, Alignment as XLAlignment
+from openpyxl.styles import Font as XLFont, Alignment as XLAlignment, Border, Side, PatternFill
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 BUILD_NUMBER = "20260417"
 CM_TO_PX_96 = 96 / 2.54
 CROP_PRESETS = {
@@ -44,6 +44,8 @@ CROP_PRESETS = {
     "9:16": (9, 16),
 }
 THUMB_SIZE = 100
+GROUP_ICON = "\u25bc"
+GROUP_ICON_COLLAPSED = "\u25b6"
 
 
 def estimate_size(path, max_w, max_h):
@@ -110,42 +112,47 @@ class InsertWorker(QThread):
             wb = openpyxl.load_workbook(p["excel_path"])
         else:
             wb = openpyxl.Workbook()
+            # Remove default "Sheet" if creating new
+            if "Sheet" in wb.sheetnames and p.get("sheet_name") != "Sheet":
+                del wb["Sheet"]
 
+        # Create or get the target sheet
+        sheet_name = p["sheet_name"]
         if p["sheet_new"]:
-            ws = wb.create_sheet(title=p["sheet_name"])
+            ws = wb.create_sheet(title=sheet_name)
+            # Move sheet to requested position
+            insert_after = p.get("insert_after_idx", None)
+            if insert_after is not None and insert_after >= 0:
+                # Move to position after insert_after
+                wb.move_sheet(ws, offset=insert_after - len(wb.sheetnames) + 2)
         else:
-            ws = wb[p["sheet_name"]]
+            ws = wb[sheet_name]
 
         groups = p["groups"]
         cols = p["grid_cols"]
         start_col_idx = openpyxl.utils.column_index_from_string(p["start_col"])
         start_row = p["start_row"]
+        use_groups = p.get("use_groups", False)
 
-        # Count total images for progress
         total_images = sum(len(g["images"]) for g in groups)
         processed = 0
         current_row = start_row
 
-        # Track group header positions for TOC
-        toc_entries = []  # [(group_title, sheet_name, cell_ref)]
-
-        use_groups = p.get("use_groups", False)
+        toc_entries = []
 
         for group in groups:
             title = group["title"]
             images = group["images"]
 
             if use_groups:
-                # Write group header
                 header_cell = f"{get_column_letter(start_col_idx)}{current_row}"
                 ws[header_cell] = title
                 ws[header_cell].font = XLFont(bold=True, size=12)
                 ws[header_cell].alignment = XLAlignment(vertical="center")
                 ws.row_dimensions[current_row].height = 22
-                toc_entries.append((title, p["sheet_name"], header_cell))
+                toc_entries.append((title, sheet_name, header_cell))
                 current_row += 1
 
-            # Insert images for this group
             for i, img_path in enumerate(images):
                 self.status.emit(f"Processing {processed+1}/{total_images}: {Path(img_path).name}")
 
@@ -194,10 +201,6 @@ class InsertWorker(QThread):
                     emu_w = pixels_to_EMU(img_w_px)
                     emu_h = pixels_to_EMU(img_h_px)
 
-                    # Walk to find the absolute row in the sheet
-                    abs_row = current_row
-
-                    # Walk columns for x offset
                     col_i = start_col_idx
                     remaining_x = x_px
                     while remaining_x > 0:
@@ -207,8 +210,7 @@ class InsertWorker(QThread):
                         remaining_x -= cw
                         col_i += 1
 
-                    # Walk rows for y offset — start from the current_row
-                    row_i = abs_row
+                    row_i = current_row
                     remaining_y = y_px
                     while remaining_y > 0:
                         rh = self._row_height_px(ws, row_i)
@@ -233,12 +235,10 @@ class InsertWorker(QThread):
                 processed += 1
                 self.progress.emit(int(processed / total_images * 100))
 
-            # Advance current_row past the images
             image_rows = math.ceil(len(images) / cols) if images else 0
             if p["placement"] == "in_cell":
                 current_row += image_rows
             else:
-                # For over-cells: estimate rows based on image height + gap
                 img_total_h_px = image_rows * (h_cm * CM_TO_PX_96 + p.get("gap_v_cm", 0.5) * CM_TO_PX_96)
                 rows_consumed = 1
                 h_acc = 0
@@ -248,35 +248,61 @@ class InsertWorker(QThread):
                 current_row += rows_consumed
 
             if use_groups:
-                # Add gap row between groups
                 current_row += 1
 
-        # ── Create TOC sheet ──────────────────────────────────────────────
-        if p.get("create_toc", True) and toc_entries:
+        # ── TOC sheet ─────────────────────────────────────────────────────
+        if p.get("create_toc", False) and toc_entries:
             toc_name = "Contents"
+            thin_border = Border(
+                left=Side(style="thin", color="D0D0D0"),
+                right=Side(style="thin", color="D0D0D0"),
+                top=Side(style="thin", color="D0D0D0"),
+                bottom=Side(style="thin", color="D0D0D0"),
+            )
+            header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+            sheet_fill = PatternFill(start_color="E8F0FE", end_color="E8F0FE", fill_type="solid")
+
             if toc_name in wb.sheetnames:
-                del wb[toc_name]
-            toc_ws = wb.create_sheet(title=toc_name, index=0)
+                toc_ws = wb[toc_name]
+                # Find the last used row to append
+                toc_row = toc_ws.max_row + 2
+            else:
+                toc_ws = wb.create_sheet(title=toc_name, index=0)
+                # Title row
+                toc_ws["A1"] = "Contents"
+                toc_ws["A1"].font = XLFont(bold=True, size=16, color="FFFFFF")
+                toc_ws["A1"].fill = header_fill
+                toc_ws["A1"].alignment = XLAlignment(vertical="center")
+                toc_ws["B1"].fill = header_fill
+                toc_ws["C1"].fill = header_fill
+                toc_ws.row_dimensions[1].height = 32
+                toc_ws.column_dimensions["A"].width = 6
+                toc_ws.column_dimensions["B"].width = 40
+                toc_ws.column_dimensions["C"].width = 15
+                toc_row = 3
 
-            toc_ws["A1"] = "Contents"
-            toc_ws["A1"].font = XLFont(bold=True, size=14)
-            toc_ws.row_dimensions[1].height = 28
+            # Find position of this sheet among all sheets for correct ordering
+            sheet_idx = wb.sheetnames.index(sheet_name) if sheet_name in wb.sheetnames else -1
 
-            toc_row = 3
-            # Sheet name header
-            toc_ws[f"A{toc_row}"] = p["sheet_name"]
+            # Sheet name row
+            toc_ws[f"A{toc_row}"] = f"\u25b8 {sheet_name}"
             toc_ws[f"A{toc_row}"].font = XLFont(bold=True, size=11, color="1F4E79")
-            toc_ws[f"A{toc_row}"].hyperlink = f"#'{p['sheet_name']}'!A1"
+            toc_ws[f"A{toc_row}"].fill = sheet_fill
+            toc_ws[f"B{toc_row}"].fill = sheet_fill
+            toc_ws[f"C{toc_row}"].fill = sheet_fill
+            toc_ws[f"A{toc_row}"].hyperlink = f"#'{sheet_name}'!A1"
+            toc_ws[f"A{toc_row}"].border = thin_border
+            toc_ws[f"B{toc_row}"].border = thin_border
+            toc_ws.row_dimensions[toc_row].height = 22
             toc_row += 1
 
-            for title, sheet_name, cell_ref in toc_entries:
+            for title, sn, cell_ref in toc_entries:
                 toc_ws[f"B{toc_row}"] = title
                 toc_ws[f"B{toc_row}"].font = XLFont(size=10, color="0563C1", underline="single")
-                toc_ws[f"B{toc_row}"].hyperlink = f"#'{sheet_name}'!{cell_ref}"
+                toc_ws[f"B{toc_row}"].hyperlink = f"#'{sn}'!{cell_ref}"
+                toc_ws[f"B{toc_row}"].border = thin_border
+                toc_ws[f"A{toc_row}"].border = thin_border
                 toc_row += 1
-
-            toc_ws.column_dimensions["A"].width = 25
-            toc_ws.column_dimensions["B"].width = 40
 
         save_path = p["save_path"] or p["excel_path"]
         self.status.emit(f"Saving {save_path}...")
@@ -331,199 +357,6 @@ class ImageLoaderThread(QThread):
         self.finished.emit()
 
 
-# ── Thumbnail stack widget ─────────────────────────────────────────────────────
-class ThumbCard(QWidget):
-    delete_requested = pyqtSignal(str)
-    selection_toggled = pyqtSignal(str, bool)
-
-    def __init__(self, path, orig_mb, est_mb, w, h):
-        super().__init__()
-        self.path = path
-        self.orig_mb = orig_mb
-        self.est_mb = est_mb
-        self.img_w = w
-        self.img_h = h
-        self.selected = False
-        self._drag_start = None
-
-        self.pixmap = QPixmap(path).scaled(
-            THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-        self.setFixedSize(self.pixmap.width(), self.pixmap.height())
-        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.2f} MB -> {est_mb:.2f} MB")
-
-    def paintEvent(self, event):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.drawPixmap(0, 0, self.pixmap)
-        if self.selected:
-            p.setPen(QPen(QColor("#6366f1"), 3))
-            p.setBrush(Qt.NoBrush)
-            p.drawRect(1, 1, self.width() - 2, self.height() - 2)
-        bar_h = 18
-        bar_y = self.height() - bar_h
-        p.fillRect(0, bar_y, self.width(), bar_h, QColor(255, 255, 255, 200))
-        p.setFont(QFont("Arial", 8))
-        p.setPen(QColor("#333"))
-        p.drawText(4, bar_y, self.width() // 2, bar_h,
-                   Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.2f}MB")
-        p.setPen(QColor("#16a34a"))
-        p.drawText(self.width() // 2, bar_y, self.width() // 2 - 4, bar_h,
-                   Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.2f}MB")
-        btn_r = 9
-        cx = self.width() - btn_r - 4
-        cy = btn_r + 4
-        p.setBrush(QColor(255, 255, 255, 220))
-        p.setPen(Qt.NoPen)
-        p.drawEllipse(QPoint(cx, cy), btn_r, btn_r)
-        p.setPen(QColor("#333"))
-        p.setFont(QFont("Arial", 9, QFont.Bold))
-        p.drawText(cx - btn_r, cy - btn_r, btn_r * 2, btn_r * 2, Qt.AlignCenter, "\u00d7")
-        p.end()
-
-    def mousePressEvent(self, event):
-        btn_r = 9
-        cx = self.width() - btn_r - 4
-        cy = btn_r + 4
-        if (event.pos().x() - cx) ** 2 + (event.pos().y() - cy) ** 2 <= (btn_r + 3) ** 2:
-            self.delete_requested.emit(self.path)
-            return
-        self._drag_start = event.pos()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_start and (event.pos() - self._drag_start).manhattanLength() > 10:
-            from PyQt5.QtCore import QMimeData
-            from PyQt5.QtGui import QDrag
-            drag = QDrag(self)
-            mime = QMimeData()
-            mime.setText(self.path)
-            drag.setMimeData(mime)
-            drag.setPixmap(self.pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            drag.exec_(Qt.MoveAction)
-            self._drag_start = None
-
-    def mouseReleaseEvent(self, event):
-        if self._drag_start:
-            self.selected = not self.selected
-            self.selection_toggled.emit(self.path, self.selected)
-            self.update()
-        self._drag_start = None
-
-
-class ThumbStackView(QScrollArea):
-    delete_requested = pyqtSignal(str)
-    order_changed = pyqtSignal(list)
-
-    def __init__(self):
-        super().__init__()
-        self.setWidgetResizable(True)
-        self.setAcceptDrops(True)
-        self.setStyleSheet("ThumbStackView { border: 1px solid palette(mid); border-radius: 6px; }")
-        self.container = QWidget()
-        self.container.setAcceptDrops(True)
-        self.flow = FlowLayout(self.container)
-        self.flow.setSpacing(8)
-        self.setWidget(self.container)
-        self.cards = []
-        self.selected_paths = set()
-        self._paths = []
-
-    def set_images(self, paths, max_w, max_h):
-        self.flow.clear_widgets()
-        for c in self.cards:
-            c.setParent(None)
-            c.deleteLater()
-        self.cards.clear()
-        self.selected_paths.clear()
-        self._paths = list(paths)
-        for path in paths:
-            orig_mb, est_mb, w, h = estimate_size(path, max_w, max_h)
-            card = ThumbCard(path, orig_mb, est_mb, w, h)
-            card.delete_requested.connect(self._on_delete)
-            card.selection_toggled.connect(self._on_selection)
-            self.cards.append(card)
-        self.flow.set_widgets(self.cards)
-
-    def _on_delete(self, path):
-        self.delete_requested.emit(path)
-
-    def _on_selection(self, path, selected):
-        if selected:
-            self.selected_paths.add(path)
-        else:
-            self.selected_paths.discard(path)
-
-    def get_selected(self):
-        return list(self.selected_paths)
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasText():
-            event.acceptProposedAction()
-
-    def dragMoveEvent(self, event):
-        event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        src_path = event.mimeData().text()
-        if src_path not in self._paths:
-            return
-        drop_pos = self.container.mapFrom(self, event.pos())
-        target_idx = len(self._paths) - 1
-        for i, card in enumerate(self.cards):
-            if card.geometry().contains(drop_pos):
-                target_idx = i
-                break
-        src_idx = self._paths.index(src_path)
-        if src_idx == target_idx:
-            return
-        self._paths.pop(src_idx)
-        self._paths.insert(target_idx, src_path)
-        self.order_changed.emit(list(self._paths))
-        event.acceptProposedAction()
-
-
-class FlowLayout(QVBoxLayout):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._widgets = []
-
-    def clear_widgets(self):
-        self._widgets.clear()
-        while self.count():
-            item = self.takeAt(0)
-            if item.layout():
-                while item.layout().count():
-                    item.layout().takeAt(0)
-
-    def set_widgets(self, widgets):
-        self._widgets = list(widgets)
-        self._relayout()
-
-    def addWidget(self, widget):
-        self._widgets.append(widget)
-        self._relayout()
-
-    def _relayout(self):
-        while self.count():
-            item = self.takeAt(0)
-            if item.layout():
-                while item.layout().count():
-                    item.layout().takeAt(0)
-        if not self._widgets:
-            return
-        parent = self.parentWidget()
-        available_w = parent.width() if parent else 600
-        card_w = THUMB_SIZE + 10
-        cols = max(1, available_w // card_w)
-        row_lay = None
-        for i, w in enumerate(self._widgets):
-            if i % cols == 0:
-                row_lay = QHBoxLayout()
-                row_lay.setAlignment(Qt.AlignLeft)
-                super().addLayout(row_lay)
-            row_lay.addWidget(w)
-
-
 # ── Grid preview widget ───────────────────────────────────────────────────────
 class GridPreview(QWidget):
     HEADER_H = 16
@@ -537,6 +370,7 @@ class GridPreview(QWidget):
         self.start_col = "A"
         self.start_row = 1
         self.placement = "over"
+        self.use_groups = False
         self.setMinimumHeight(100)
         self.setMaximumHeight(160)
 
@@ -553,12 +387,10 @@ class GridPreview(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-
         total_w = self.width()
         total_h = self.height()
         hh = self.HEADER_H
         rw = self.ROW_NUM_W
-
         painter.fillRect(self.rect(), QColor("#f0f0f0"))
 
         total_images = sum(len(g["images"]) for g in self.groups)
@@ -567,34 +399,30 @@ class GridPreview(QWidget):
             painter.end()
             return
 
-        # Calculate total rows needed
         start_col_idx = self._col_to_idx(self.start_col)
         content_rows = 0
         for g in self.groups:
             if self.use_groups:
-                content_rows += 1  # header row
+                content_rows += 1
             content_rows += math.ceil(len(g["images"]) / self.cols) if g["images"] else 0
             if self.use_groups:
-                content_rows += 1  # gap
+                content_rows += 1
 
         show_cols = max(self.cols + start_col_idx, start_col_idx + self.cols + 1)
         show_rows = max(content_rows + self.start_row, self.start_row + content_rows + 1)
-
         self._draw_headers(painter, total_w, total_h, hh, rw, show_cols, show_rows)
 
         grid_w = total_w - rw
         grid_h = total_h - hh
         cell_w = grid_w / show_cols if show_cols else grid_w
         cell_h = grid_h / show_rows if show_rows else grid_h
-
         aspect = (self.crop_ratio[0] / self.crop_ratio[1]) if self.crop_ratio else 4 / 3
 
-        current_row = self.start_row - 1  # 0-based
+        current_row = self.start_row - 1
         img_num = 0
 
         for g in self.groups:
             if self.use_groups:
-                # Draw header text
                 hx = rw + start_col_idx * cell_w + 2
                 hy = hh + current_row * cell_h
                 painter.setPen(QColor("#1a1a1a"))
@@ -612,12 +440,10 @@ class GridPreview(QWidget):
                     img_num += 1
                     grid_col = start_col_idx + c
                     grid_row = current_row + r
-
                     cx = rw + grid_col * cell_w + 1
                     cy = hh + grid_row * cell_h + 1
                     cw = cell_w - 2
                     ch = cell_h - 2
-
                     img_aspect = aspect
                     cell_aspect = cw / ch if ch > 0 else 1
                     if img_aspect > cell_aspect:
@@ -626,13 +452,12 @@ class GridPreview(QWidget):
                         ih, iw = ch, ch * img_aspect
                     ix = cx + (cw - iw) / 2
                     iy = cy + (ch - ih) / 2
-
                     painter.fillRect(int(ix), int(iy), int(iw), int(ih), QColor("#6366f1"))
                     painter.setPen(QColor("#fff"))
                     painter.setFont(QFont("Arial", 7))
                     painter.drawText(int(ix), int(iy), int(iw), int(ih), Qt.AlignCenter, str(img_num))
 
-            current_row += img_rows + (1 if self.use_groups else 0)  # +1 gap between groups
+            current_row += img_rows + (1 if self.use_groups else 0)
 
         painter.end()
 
@@ -676,17 +501,20 @@ class GridPreview(QWidget):
 
 # ── Main window ────────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
+    GROUP_ROLE = Qt.UserRole + 1  # stores group index
+    PATH_ROLE = Qt.UserRole + 2  # stores image path
+    TYPE_ROLE = Qt.UserRole + 3  # "group" or "image"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Excel Image Inserter")
         self.setMinimumSize(750, 750)
-        # Data model: list of groups, each with title + images
         self.groups = [{"title": "Group 1", "images": []}]
+        self._collapsed_groups = set()  # indices of collapsed groups
         self._build_ui()
 
     @property
     def image_paths(self):
-        """Flat list of all images across groups."""
         return [p for g in self.groups for p in g["images"]]
 
     def _build_ui(self):
@@ -736,12 +564,24 @@ class MainWindow(QMainWindow):
         self.le_new_sheet.setEnabled(False)
         self.cb_new_sheet.toggled.connect(self.le_new_sheet.setEnabled)
         self.cb_new_sheet.toggled.connect(lambda v: self.combo_sheet.setEnabled(not v))
+        self.cb_new_sheet.toggled.connect(self._on_new_sheet_toggled)
         row3.addWidget(self.cb_new_sheet)
         row3.addWidget(self.le_new_sheet)
         lay_file.addLayout(row3)
 
+        # Insert after selector (for new sheets)
+        row_insert = QHBoxLayout()
+        self.lbl_insert_after = QLabel("Insert after:")
+        self.combo_insert_after = QComboBox()
+        self.combo_insert_after.addItem("(at the end)")
+        row_insert.addWidget(self.lbl_insert_after)
+        row_insert.addWidget(self.combo_insert_after, 1)
+        self.lbl_insert_after.hide()
+        self.combo_insert_after.hide()
+        lay_file.addLayout(row_insert)
+
         # TOC checkbox
-        self.cb_toc = QCheckBox("Create Contents sheet with links")
+        self.cb_toc = QCheckBox("Create / update Contents sheet with links")
         self.cb_toc.setChecked(True)
         self.cb_toc.hide()
         lay_file.addWidget(self.cb_toc)
@@ -749,11 +589,11 @@ class MainWindow(QMainWindow):
         self.rb_new.toggled.connect(self._on_file_mode_changed)
         root.addWidget(grp_file)
 
-        # ── Groups + Images ───────────────────────────────────────────────
+        # ── Images ─────────────────────────────────────────────────────────
         grp_img = QGroupBox("Images")
         lay_img = QVBoxLayout(grp_img)
 
-        # Mode: simple (flat) vs grouped
+        # Mode toggle
         mode_row = QHBoxLayout()
         self.cb_use_groups = QCheckBox("Use groups (headers + TOC)")
         self.cb_use_groups.toggled.connect(self._on_group_mode_toggled)
@@ -761,117 +601,54 @@ class MainWindow(QMainWindow):
         mode_row.addStretch()
         lay_img.addLayout(mode_row)
 
-        # Group controls (hidden by default)
-        self.group_widget = QWidget()
-        group_row = QHBoxLayout(self.group_widget)
-        group_row.setContentsMargins(0, 0, 0, 0)
-        group_row.addWidget(QLabel("Group:"))
-        self.combo_group = QComboBox()
-        self.combo_group.setMinimumWidth(150)
-        self.combo_group.currentIndexChanged.connect(self._on_group_changed)
-        group_row.addWidget(self.combo_group, 1)
+        # Image/group controls
+        btn_row = QHBoxLayout()
+        self.btn_add_img = QPushButton("Add images...")
+        self.btn_add_img.clicked.connect(self._add_images)
         self.btn_add_group = QPushButton("+ Group")
         self.btn_add_group.clicked.connect(self._add_group)
-        self.btn_rename_group = QPushButton("Rename")
-        self.btn_rename_group.clicked.connect(self._rename_group)
-        self.btn_del_group = QPushButton("- Group")
-        self.btn_del_group.clicked.connect(self._delete_group)
-        self.btn_group_up = QPushButton("\u25b2")
-        self.btn_group_up.setMaximumWidth(28)
-        self.btn_group_up.setToolTip("Move group up")
-        self.btn_group_up.clicked.connect(lambda: self._move_group(-1))
-        self.btn_group_down = QPushButton("\u25bc")
-        self.btn_group_down.setMaximumWidth(28)
-        self.btn_group_down.setToolTip("Move group down")
-        self.btn_group_down.clicked.connect(lambda: self._move_group(1))
-        group_row.addWidget(self.btn_add_group)
-        group_row.addWidget(self.btn_rename_group)
-        group_row.addWidget(self.btn_del_group)
-        group_row.addWidget(self.btn_group_up)
-        group_row.addWidget(self.btn_group_down)
-        self.group_widget.hide()
-        lay_img.addWidget(self.group_widget)
-
-        # Image controls
-        btn_row = QHBoxLayout()
-        self.btn_add_img = QPushButton("Add...")
-        self.btn_add_img.clicked.connect(self._add_images)
-        self.btn_remove_img = QPushButton("Remove")
-        self.btn_remove_img.clicked.connect(self._remove_selected)
-        self.btn_clear_img = QPushButton("Clear")
+        self.btn_add_group.hide()
+        self.btn_remove = QPushButton("Remove")
+        self.btn_remove.clicked.connect(self._remove_selected)
+        self.btn_clear_img = QPushButton("Clear all")
         self.btn_clear_img.clicked.connect(self._clear_images)
         self.btn_move_up = QPushButton("\u25b2")
         self.btn_move_up.setMaximumWidth(28)
-        self.btn_move_up.setToolTip("Move image up")
+        self.btn_move_up.setToolTip("Move up")
         self.btn_move_up.clicked.connect(lambda: self._move_selected(-1))
         self.btn_move_down = QPushButton("\u25bc")
         self.btn_move_down.setMaximumWidth(28)
-        self.btn_move_down.setToolTip("Move image down")
+        self.btn_move_down.setToolTip("Move down")
         self.btn_move_down.clicked.connect(lambda: self._move_selected(1))
         btn_row.addWidget(self.btn_add_img)
-        btn_row.addWidget(self.btn_remove_img)
+        btn_row.addWidget(self.btn_add_group)
+        btn_row.addWidget(self.btn_remove)
         btn_row.addWidget(self.btn_clear_img)
         btn_row.addWidget(self.btn_move_up)
         btn_row.addWidget(self.btn_move_down)
         btn_row.addStretch()
-
-        self.btn_view_thumb_list = QPushButton("List")
-        self.btn_view_detail = QPushButton("Details")
-        self.btn_view_thumb_stack = QPushButton("Stack")
-        for b in [self.btn_view_thumb_list, self.btn_view_detail, self.btn_view_thumb_stack]:
-            b.setCheckable(True)
-            b.setMaximumWidth(65)
-            b.setStyleSheet("QPushButton:checked{background:#6366f1;color:#fff;border-radius:4px;padding:3px 6px}")
-        self.btn_view_thumb_list.setChecked(True)
-        self.btn_view_thumb_list.clicked.connect(lambda: self._switch_view("list"))
-        self.btn_view_detail.clicked.connect(lambda: self._switch_view("detail"))
-        self.btn_view_thumb_stack.clicked.connect(lambda: self._switch_view("stack"))
-        btn_row.addWidget(self.btn_view_thumb_list)
-        btn_row.addWidget(self.btn_view_detail)
-        btn_row.addWidget(self.btn_view_thumb_stack)
         lay_img.addLayout(btn_row)
 
-        # View: Thumbnail list
-        self.tree_list = QTreeWidget()
-        self.tree_list.setHeaderLabels(["", "File", "Size", "After", ""])
-        self.tree_list.setIconSize(QSize(48, 48))
-        self.tree_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.tree_list.setRootIsDecorated(False)
-        self.tree_list.setColumnWidth(0, 56)
-        self.tree_list.setColumnWidth(1, 200)
-        self.tree_list.setColumnWidth(2, 70)
-        self.tree_list.setColumnWidth(3, 70)
-        self.tree_list.setColumnWidth(4, 30)
-        self.tree_list.header().setStretchLastSection(False)
-        self.tree_list.header().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.tree_list.setMinimumHeight(150)
-        self.tree_list.itemClicked.connect(self._on_tree_click)
-        lay_img.addWidget(self.tree_list)
-
-        # View: Detail list
-        self.tree_detail = QTreeWidget()
-        self.tree_detail.setHeaderLabels(["File", "Dimensions", "Size", "After", ""])
-        self.tree_detail.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.tree_detail.setRootIsDecorated(False)
-        self.tree_detail.setColumnWidth(0, 220)
-        self.tree_detail.setColumnWidth(1, 90)
-        self.tree_detail.setColumnWidth(2, 70)
-        self.tree_detail.setColumnWidth(3, 70)
-        self.tree_detail.setColumnWidth(4, 30)
-        self.tree_detail.header().setStretchLastSection(False)
-        self.tree_detail.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.tree_detail.setMinimumHeight(150)
-        self.tree_detail.itemClicked.connect(self._on_tree_detail_click)
-        self.tree_detail.hide()
-        lay_img.addWidget(self.tree_detail)
-
-        # View: Thumbnail stack
-        self.thumb_stack = ThumbStackView()
-        self.thumb_stack.delete_requested.connect(self._delete_by_path)
-        self.thumb_stack.order_changed.connect(self._on_stack_reorder)
-        self.thumb_stack.setMinimumHeight(150)
-        self.thumb_stack.hide()
-        lay_img.addWidget(self.thumb_stack)
+        # Main tree view with expand/collapse groups
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabels(["", "Name", "Size", "After", ""])
+        self.tree.setIconSize(QSize(48, 48))
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setColumnWidth(0, 56)
+        self.tree.setColumnWidth(1, 200)
+        self.tree.setColumnWidth(2, 70)
+        self.tree.setColumnWidth(3, 70)
+        self.tree.setColumnWidth(4, 30)
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tree.setMinimumHeight(200)
+        self.tree.itemClicked.connect(self._on_tree_click)
+        self.tree.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tree.setDefaultDropAction(Qt.MoveAction)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+        lay_img.addWidget(self.tree)
 
         # Bottom: count + total
         bottom_row = QHBoxLayout()
@@ -937,7 +714,6 @@ class MainWindow(QMainWindow):
         self._cm_updating = False
         settings_row.addWidget(grp_display)
 
-        # Crop
         grp_crop = QGroupBox("Crop")
         g_c = QVBoxLayout(grp_crop)
         self.combo_crop = QComboBox()
@@ -950,7 +726,7 @@ class MainWindow(QMainWindow):
 
         root.addLayout(settings_row)
 
-        # ── Grid + Position + Preview in one row ───────────────────────────
+        # ── Grid + Position + Preview ──────────────────────────────────────
         grid_row = QHBoxLayout()
 
         grp_grid = QGroupBox("Grid")
@@ -1023,104 +799,30 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.btn_insert)
         root.addLayout(action_row)
 
-        # ── About ──────────────────────────────────────────────────────────
+        # About
         about_lbl = QLabel(f"v{APP_VERSION} (build {BUILD_NUMBER})  |  I.Moskvin using Claude Opus 4.6")
         about_lbl.setStyleSheet("color: #999; font-size: 10px; padding: 2px 0;")
         about_lbl.setAlignment(Qt.AlignCenter)
         root.addWidget(about_lbl)
 
-        # Init group combo
-        self._refresh_group_combo()
+        self._rebuild_tree()
 
-    # ── Group management ──────────────────────────────────────────────────
-    def _refresh_group_combo(self):
-        self.combo_group.blockSignals(True)
-        idx = self.combo_group.currentIndex()
-        self.combo_group.clear()
-        for i, g in enumerate(self.groups):
-            count = len(g["images"])
-            self.combo_group.addItem(f"{g['title']} ({count})")
-        if 0 <= idx < len(self.groups):
-            self.combo_group.setCurrentIndex(idx)
-        elif self.groups:
-            self.combo_group.setCurrentIndex(0)
-        self.combo_group.blockSignals(False)
-
-    def _current_group_idx(self):
-        idx = self.combo_group.currentIndex()
-        if 0 <= idx < len(self.groups):
-            return idx
-        return 0 if self.groups else -1
-
-    def _current_group(self):
-        idx = self._current_group_idx()
-        if idx >= 0:
-            return self.groups[idx]
-        return None
-
-    def _add_group(self):
-        name, ok = QInputDialog.getText(self, "New Group", "Group title:")
-        if ok and name.strip():
-            self.groups.append({"title": name.strip(), "images": []})
-            self._refresh_group_combo()
-            self.combo_group.setCurrentIndex(len(self.groups) - 1)
-            self._on_settings_changed()
-
-    def _rename_group(self):
-        g = self._current_group()
-        if not g:
-            return
-        name, ok = QInputDialog.getText(self, "Rename Group", "New title:", text=g["title"])
-        if ok and name.strip():
-            g["title"] = name.strip()
-            self._refresh_group_combo()
-            self._on_settings_changed()
-
-    def _delete_group(self):
-        if len(self.groups) <= 1:
-            QMessageBox.warning(self, "Error", "Cannot delete the last group.")
-            return
-        idx = self._current_group_idx()
-        g = self.groups[idx]
-        if g["images"]:
-            if QMessageBox.question(self, "Delete Group",
-                                    f"Delete '{g['title']}' with {len(g['images'])} images?",
-                                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-                return
-        self.groups.pop(idx)
-        self._refresh_group_combo()
-        self._rebuild_views()
-
-    def _move_group(self, direction):
-        idx = self._current_group_idx()
-        new_idx = idx + direction
-        if new_idx < 0 or new_idx >= len(self.groups):
-            return
-        self.groups[idx], self.groups[new_idx] = self.groups[new_idx], self.groups[idx]
-        self._refresh_group_combo()
-        self.combo_group.setCurrentIndex(new_idx)
-        self._on_settings_changed()
-
-    def _on_group_mode_toggled(self, enabled):
-        self.group_widget.setVisible(enabled)
-        self.cb_toc.setVisible(enabled)
-        if not enabled:
-            # Flatten all groups into one
-            all_images = self.image_paths
-            self.groups = [{"title": "All Images", "images": all_images}]
-            self._refresh_group_combo()
-        self._rebuild_views()
-
-    def _on_group_changed(self, idx):
-        self._rebuild_views()
-
-    # ── Slots ──────────────────────────────────────────────────────────────
+    # ── File/sheet management ─────────────────────────────────────────────
     def _on_file_mode_changed(self):
         is_open = self.rb_open.isChecked()
         self.btn_browse_file.setText("Browse..." if is_open else "Save as...")
         if not is_open:
             self.combo_sheet.clear()
             self.cb_new_sheet.setChecked(True)
+
+    def _on_new_sheet_toggled(self, checked):
+        self.lbl_insert_after.setVisible(checked and self.combo_sheet.count() > 0)
+        self.combo_insert_after.setVisible(checked and self.combo_sheet.count() > 0)
+        if checked:
+            self.combo_insert_after.clear()
+            self.combo_insert_after.addItem("(at the end)")
+            for i in range(self.combo_sheet.count()):
+                self.combo_insert_after.addItem(self.combo_sheet.itemText(i))
 
     def _browse_file(self):
         if self.rb_open.isChecked():
@@ -1138,210 +840,303 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     QMessageBox.warning(self, "Error", str(e))
 
-    def _add_images(self):
-        g = self._current_group()
-        if not g:
+    # ── Group mode toggle ─────────────────────────────────────────────────
+    def _on_group_mode_toggled(self, enabled):
+        self.btn_add_group.setVisible(enabled)
+        self.cb_toc.setVisible(enabled)
+        if not enabled:
+            all_images = self.image_paths
+            self.groups = [{"title": "All Images", "images": all_images}]
+        self._rebuild_tree()
+
+    # ── Group management ──────────────────────────────────────────────────
+    def _add_group(self):
+        name, ok = QInputDialog.getText(self, "New Group", "Group title:")
+        if ok and name.strip():
+            self.groups.append({"title": name.strip(), "images": []})
+            self._rebuild_tree()
+            self._on_settings_changed()
+
+    def _get_selected_group_idx(self):
+        """Get group index of currently selected item."""
+        items = self.tree.selectedItems()
+        if not items:
+            return len(self.groups) - 1 if self.groups else -1
+        item = items[0]
+        tp = item.data(0, self.TYPE_ROLE)
+        if tp == "group":
+            return item.data(0, self.GROUP_ROLE)
+        elif tp == "image":
+            return item.data(0, self.GROUP_ROLE)
+        return 0
+
+    # ── Tree view ─────────────────────────────────────────────────────────
+    def _rebuild_tree(self):
+        max_w, max_h = self._get_resize_px()
+        use_groups = self.cb_use_groups.isChecked()
+        self.tree.clear()
+
+        for gi, group in enumerate(self.groups):
+            if use_groups:
+                # Group header row
+                collapsed = gi in self._collapsed_groups
+                icon = GROUP_ICON_COLLAPSED if collapsed else GROUP_ICON
+                grp_item = QTreeWidgetItem([
+                    icon,
+                    f"{group['title']} ({len(group['images'])})",
+                    "", "", ""
+                ])
+                grp_item.setData(0, self.TYPE_ROLE, "group")
+                grp_item.setData(0, self.GROUP_ROLE, gi)
+                grp_font = grp_item.font(1)
+                grp_font.setBold(True)
+                grp_item.setFont(1, grp_font)
+                grp_item.setBackground(0, QColor("#e8f0fe"))
+                grp_item.setBackground(1, QColor("#e8f0fe"))
+                grp_item.setBackground(2, QColor("#e8f0fe"))
+                grp_item.setBackground(3, QColor("#e8f0fe"))
+                grp_item.setBackground(4, QColor("#e8f0fe"))
+                self.tree.addTopLevelItem(grp_item)
+
+                if collapsed:
+                    continue
+
+            for p in group["images"]:
+                orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
+                item = QTreeWidgetItem([
+                    "",
+                    Path(p).name,
+                    f"{orig_mb:.2f} MB",
+                    f"{est_mb:.2f} MB",
+                    "\u00d7"
+                ])
+                item.setData(0, self.TYPE_ROLE, "image")
+                item.setData(0, self.PATH_ROLE, p)
+                item.setData(0, self.GROUP_ROLE, gi)
+                try:
+                    px = QPixmap(p).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                    item.setIcon(0, QIcon(px))
+                except Exception:
+                    pass
+                self.tree.addTopLevelItem(item)
+
+        self._update_count()
+
+    def _on_tree_click(self, item, col):
+        tp = item.data(0, self.TYPE_ROLE)
+        if tp == "group":
+            gi = item.data(0, self.GROUP_ROLE)
+            if col <= 1:
+                # Toggle expand/collapse
+                if gi in self._collapsed_groups:
+                    self._collapsed_groups.discard(gi)
+                else:
+                    self._collapsed_groups.add(gi)
+                self._rebuild_tree()
             return
+        if tp == "image" and col == 4:
+            path = item.data(0, self.PATH_ROLE)
+            if path:
+                self._delete_by_path(path, item.data(0, self.GROUP_ROLE))
+
+    def _on_tree_context_menu(self, pos):
+        item = self.tree.itemAt(pos)
+        if not item:
+            return
+        tp = item.data(0, self.TYPE_ROLE)
+        menu = QMenu(self)
+
+        if tp == "group":
+            gi = item.data(0, self.GROUP_ROLE)
+            menu.addAction("Rename group", lambda: self._rename_group(gi))
+            if len(self.groups) > 1:
+                menu.addAction("Delete group", lambda: self._delete_group(gi))
+            if gi > 0:
+                menu.addAction("Move group up", lambda: self._move_group(gi, -1))
+            if gi < len(self.groups) - 1:
+                menu.addAction("Move group down", lambda: self._move_group(gi, 1))
+        elif tp == "image":
+            path = item.data(0, self.PATH_ROLE)
+            gi = item.data(0, self.GROUP_ROLE)
+            if self.cb_use_groups.isChecked() and len(self.groups) > 1:
+                move_menu = menu.addMenu("Move to group...")
+                for i, g in enumerate(self.groups):
+                    if i != gi:
+                        move_menu.addAction(g["title"], lambda p=path, src=gi, dst=i: self._move_image_to_group(p, src, dst))
+            menu.addAction("Remove", lambda: self._delete_by_path(path, gi))
+
+        menu.exec_(self.tree.viewport().mapToGlobal(pos))
+
+    def _rename_group(self, gi):
+        g = self.groups[gi]
+        name, ok = QInputDialog.getText(self, "Rename Group", "New title:", text=g["title"])
+        if ok and name.strip():
+            g["title"] = name.strip()
+            self._rebuild_tree()
+            self._on_settings_changed()
+
+    def _delete_group(self, gi):
+        if len(self.groups) <= 1:
+            return
+        g = self.groups[gi]
+        if g["images"]:
+            if QMessageBox.question(self, "Delete Group",
+                                    f"Delete '{g['title']}' with {len(g['images'])} images?",
+                                    QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                return
+        self.groups.pop(gi)
+        self._collapsed_groups.discard(gi)
+        # Re-index collapsed groups
+        self._collapsed_groups = {i - 1 if i > gi else i for i in self._collapsed_groups if i != gi}
+        self._rebuild_tree()
+        self._on_settings_changed()
+
+    def _move_group(self, gi, direction):
+        new_gi = gi + direction
+        if new_gi < 0 or new_gi >= len(self.groups):
+            return
+        self.groups[gi], self.groups[new_gi] = self.groups[new_gi], self.groups[gi]
+        # Update collapsed set
+        new_collapsed = set()
+        for c in self._collapsed_groups:
+            if c == gi:
+                new_collapsed.add(new_gi)
+            elif c == new_gi:
+                new_collapsed.add(gi)
+            else:
+                new_collapsed.add(c)
+        self._collapsed_groups = new_collapsed
+        self._rebuild_tree()
+        self._on_settings_changed()
+
+    def _move_image_to_group(self, path, src_gi, dst_gi):
+        if path in self.groups[src_gi]["images"]:
+            self.groups[src_gi]["images"].remove(path)
+            self.groups[dst_gi]["images"].append(path)
+            self._rebuild_tree()
+
+    # ── Image management ──────────────────────────────────────────────────
+    def _add_images(self):
+        gi = self._get_selected_group_idx()
+        if gi < 0:
+            gi = 0
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Select Images", "",
             "Images (*.jpg *.jpeg *.png *.bmp *.webp *.tiff);;All Files (*)"
         )
-        new_paths = [p for p in paths if p not in g["images"]]
+        new_paths = [p for p in paths if p not in self.groups[gi]["images"]]
         if not new_paths:
             return
-        g["images"].extend(new_paths)
-        self._refresh_group_combo()
-        if len(new_paths) > 10:
-            self._rebuild_views_async()
-        else:
-            self._rebuild_views()
+        self.groups[gi]["images"].extend(new_paths)
+        # Make sure this group is expanded
+        self._collapsed_groups.discard(gi)
+        self._rebuild_tree()
 
     def _clear_images(self):
-        g = self._current_group()
-        if not g or not g["images"]:
+        total = sum(len(g["images"]) for g in self.groups)
+        if total == 0:
             return
-        if QMessageBox.question(self, "Clear", f"Remove all {len(g['images'])} images from '{g['title']}'?",
+        if QMessageBox.question(self, "Clear", f"Remove all {total} images?",
                                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
-        g["images"].clear()
-        self._refresh_group_combo()
-        self._rebuild_views()
+        for g in self.groups:
+            g["images"].clear()
+        self._rebuild_tree()
 
     def _remove_selected(self):
-        g = self._current_group()
-        if not g:
-            return
-        to_remove = set()
-        if self.tree_list.isVisible():
-            for item in self.tree_list.selectedItems():
-                to_remove.add(item.data(0, Qt.UserRole))
-        elif self.tree_detail.isVisible():
-            for item in self.tree_detail.selectedItems():
-                to_remove.add(item.data(0, Qt.UserRole))
-        elif self.thumb_stack.isVisible():
-            to_remove = set(self.thumb_stack.get_selected())
-        if not to_remove:
-            return
-        if QMessageBox.question(self, "Remove",
-                                f"Remove {len(to_remove)} image(s)?",
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            return
-        g["images"] = [p for p in g["images"] if p not in to_remove]
-        self._refresh_group_combo()
-        self._rebuild_views()
-
-    def _delete_by_path(self, path):
-        g = self._current_group()
-        if not g:
-            return
-        if QMessageBox.question(self, "Remove",
-                                f"Remove {Path(path).name}?",
-                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
-            return
-        if path in g["images"]:
-            g["images"].remove(path)
-        self._refresh_group_combo()
-        self._rebuild_views()
-
-    def _rebuild_views(self):
-        g = self._current_group()
-        images = g["images"] if g else []
-        max_w, max_h = self._get_resize_px()
-
-        self.tree_list.clear()
-        for p in images:
-            orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
-            item = QTreeWidgetItem(["", Path(p).name, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
-            item.setData(0, Qt.UserRole, p)
-            try:
-                px = QPixmap(p).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                item.setIcon(0, QIcon(px))
-            except Exception:
-                pass
-            self.tree_list.addTopLevelItem(item)
-
-        self.tree_detail.clear()
-        for p in images:
-            orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
-            dim = f"{w}\u00d7{h}" if w else "?"
-            item = QTreeWidgetItem([Path(p).name, dim, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
-            item.setData(0, Qt.UserRole, p)
-            self.tree_detail.addTopLevelItem(item)
-
-        self.thumb_stack.set_images(images, max_w, max_h)
-        self._update_count()
-
-    def _rebuild_views_async(self):
-        g = self._current_group()
-        images = g["images"] if g else []
-        max_w, max_h = self._get_resize_px()
-        total = len(images)
-        self.tree_list.clear()
-        self.tree_detail.clear()
-        self._progress_dlg = QProgressDialog("Loading images...", "Cancel", 0, total, self)
-        self._progress_dlg.setWindowTitle("Loading")
-        self._progress_dlg.setMinimumDuration(0)
-        self._progress_dlg.setWindowModality(Qt.WindowModal)
-        self._progress_dlg.setValue(0)
-        self._loader = ImageLoaderThread(list(images), max_w, max_h)
-        self._loader.progress.connect(self._on_load_progress)
-        self._loader.item_ready.connect(self._on_load_item)
-        self._loader.finished.connect(self._on_load_finished)
-        self._progress_dlg.canceled.connect(self._loader.terminate)
-        self._loader.start()
-
-    def _on_load_progress(self, current, total):
-        if hasattr(self, '_progress_dlg') and self._progress_dlg:
-            self._progress_dlg.setValue(current)
-            self._progress_dlg.setLabelText(f"Loading images... {current}/{total}")
-
-    def _on_load_item(self, path, orig_mb, est_mb, w, h):
-        item = QTreeWidgetItem(["", Path(path).name, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
-        item.setData(0, Qt.UserRole, path)
-        try:
-            px = QPixmap(path).scaled(48, 48, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            item.setIcon(0, QIcon(px))
-        except Exception:
-            pass
-        self.tree_list.addTopLevelItem(item)
-        dim = f"{w}\u00d7{h}" if w else "?"
-        item2 = QTreeWidgetItem([Path(path).name, dim, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
-        item2.setData(0, Qt.UserRole, path)
-        self.tree_detail.addTopLevelItem(item2)
-
-    def _on_load_finished(self):
-        if hasattr(self, '_progress_dlg') and self._progress_dlg:
-            self._progress_dlg.close()
-            self._progress_dlg = None
-        g = self._current_group()
-        images = g["images"] if g else []
-        max_w, max_h = self._get_resize_px()
-        self.thumb_stack.set_images(images, max_w, max_h)
-        self._update_count()
-
-    def _move_selected(self, direction):
-        g = self._current_group()
-        if not g:
-            return
-        tree = self.tree_list if self.tree_list.isVisible() else self.tree_detail if self.tree_detail.isVisible() else None
-        if not tree:
-            return
-        items = tree.selectedItems()
+        items = self.tree.selectedItems()
         if not items:
             return
-        path = items[0].data(0, Qt.UserRole)
-        if not path or path not in g["images"]:
+        to_remove = []  # (gi, path) pairs
+        groups_to_remove = []
+        for item in items:
+            tp = item.data(0, self.TYPE_ROLE)
+            if tp == "image":
+                to_remove.append((item.data(0, self.GROUP_ROLE), item.data(0, self.PATH_ROLE)))
+            elif tp == "group" and self.cb_use_groups.isChecked():
+                groups_to_remove.append(item.data(0, self.GROUP_ROLE))
+
+        if not to_remove and not groups_to_remove:
             return
-        idx = g["images"].index(path)
-        new_idx = idx + direction
-        if new_idx < 0 or new_idx >= len(g["images"]):
+
+        desc = f"{len(to_remove)} image(s)" if to_remove else ""
+        if groups_to_remove:
+            desc += f"{', ' if desc else ''}{len(groups_to_remove)} group(s)"
+        if QMessageBox.question(self, "Remove", f"Remove {desc}?",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
-        g["images"][idx], g["images"][new_idx] = g["images"][new_idx], g["images"][idx]
-        # Fast swap in tree
-        tree.blockSignals(True)
-        item_a = tree.takeTopLevelItem(max(idx, new_idx))
-        item_b = tree.takeTopLevelItem(min(idx, new_idx))
-        tree.insertTopLevelItem(min(idx, new_idx), item_a)
-        tree.insertTopLevelItem(max(idx, new_idx), item_b)
-        for i in range(tree.topLevelItemCount()):
-            if tree.topLevelItem(i).data(0, Qt.UserRole) == path:
-                tree.setCurrentItem(tree.topLevelItem(i))
-                break
-        tree.blockSignals(False)
 
-    def _on_stack_reorder(self, new_order):
-        g = self._current_group()
-        if g:
-            g["images"] = new_order
-            self._refresh_group_combo()
-            self._rebuild_views()
+        for gi, path in to_remove:
+            if gi < len(self.groups) and path in self.groups[gi]["images"]:
+                self.groups[gi]["images"].remove(path)
 
-    def _on_tree_click(self, item, col):
-        if col == 4:
-            path = item.data(0, Qt.UserRole)
-            if path:
-                self._delete_by_path(path)
+        for gi in sorted(groups_to_remove, reverse=True):
+            if len(self.groups) > 1:
+                self.groups.pop(gi)
 
-    def _on_tree_detail_click(self, item, col):
-        if col == 4:
-            path = item.data(0, Qt.UserRole)
-            if path:
-                self._delete_by_path(path)
+        self._rebuild_tree()
 
-    def _switch_view(self, mode):
-        self.btn_view_thumb_list.setChecked(mode == "list")
-        self.btn_view_detail.setChecked(mode == "detail")
-        self.btn_view_thumb_stack.setChecked(mode == "stack")
-        self.tree_list.setVisible(mode == "list")
-        self.tree_detail.setVisible(mode == "detail")
-        self.thumb_stack.setVisible(mode == "stack")
+    def _delete_by_path(self, path, gi):
+        if QMessageBox.question(self, "Remove", f"Remove {Path(path).name}?",
+                                QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+            return
+        if gi < len(self.groups) and path in self.groups[gi]["images"]:
+            self.groups[gi]["images"].remove(path)
+        self._rebuild_tree()
 
+    def _move_selected(self, direction):
+        items = self.tree.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        tp = item.data(0, self.TYPE_ROLE)
+
+        if tp == "group" and self.cb_use_groups.isChecked():
+            gi = item.data(0, self.GROUP_ROLE)
+            self._move_group(gi, direction)
+            return
+
+        if tp == "image":
+            gi = item.data(0, self.GROUP_ROLE)
+            path = item.data(0, self.PATH_ROLE)
+            if gi >= len(self.groups):
+                return
+            images = self.groups[gi]["images"]
+            idx = images.index(path) if path in images else -1
+            if idx < 0:
+                return
+            new_idx = idx + direction
+            if new_idx < 0 or new_idx >= len(images):
+                return
+            images[idx], images[new_idx] = images[new_idx], images[idx]
+            # Fast swap in tree
+            tree_idx = self.tree.indexOfTopLevelItem(item)
+            swap_idx = tree_idx + direction
+            if 0 <= swap_idx < self.tree.topLevelItemCount():
+                swap_item = self.tree.topLevelItem(swap_idx)
+                if swap_item.data(0, self.TYPE_ROLE) == "image" and swap_item.data(0, self.GROUP_ROLE) == gi:
+                    self.tree.blockSignals(True)
+                    a = self.tree.takeTopLevelItem(max(tree_idx, swap_idx))
+                    b = self.tree.takeTopLevelItem(min(tree_idx, swap_idx))
+                    self.tree.insertTopLevelItem(min(tree_idx, swap_idx), a)
+                    self.tree.insertTopLevelItem(max(tree_idx, swap_idx), b)
+                    for i in range(self.tree.topLevelItemCount()):
+                        if self.tree.topLevelItem(i).data(0, self.PATH_ROLE) == path:
+                            self.tree.setCurrentItem(self.tree.topLevelItem(i))
+                            break
+                    self.tree.blockSignals(False)
+                    return
+            self._rebuild_tree()
+
+    # ── Counts and settings ───────────────────────────────────────────────
     def _update_count(self):
         all_images = self.image_paths
         n = len(all_images)
-        g = self._current_group()
-        gn = len(g["images"]) if g else 0
-        self.lbl_img_count.setText(f"{gn} in group, {n} total")
+        ng = len(self.groups)
+        if self.cb_use_groups.isChecked():
+            self.lbl_img_count.setText(f"{n} images in {ng} groups")
+        else:
+            self.lbl_img_count.setText(f"{n} image{'s' if n != 1 else ''}")
         max_w, max_h = self._get_resize_px()
         total_orig = sum(os.path.getsize(p) / (1024 * 1024) for p in all_images if os.path.exists(p))
         total_est = sum(estimate_size(p, max_w, max_h)[1] for p in all_images)
@@ -1364,7 +1159,7 @@ class MainWindow(QMainWindow):
 
     def _on_resize_changed(self, *_):
         if self.image_paths:
-            self._rebuild_views()
+            self._rebuild_tree()
 
     def _on_settings_changed(self, *_):
         crop_key = self.combo_crop.currentText()
@@ -1395,8 +1190,7 @@ class MainWindow(QMainWindow):
     def _on_cm_w_changed(self, val):
         if self._cm_updating:
             return
-        mode = self.combo_display_mode.currentIndex()
-        if mode == 1:
+        if self.combo_display_mode.currentIndex() == 1:
             self._cm_updating = True
             self.spin_cm_h.setValue(val / max(self._display_aspect, 0.01))
             self._cm_updating = False
@@ -1404,12 +1198,12 @@ class MainWindow(QMainWindow):
     def _on_cm_h_changed(self, val):
         if self._cm_updating:
             return
-        mode = self.combo_display_mode.currentIndex()
-        if mode == 1:
+        if self.combo_display_mode.currentIndex() == 1:
             self._cm_updating = True
             self.spin_cm_w.setValue(val * self._display_aspect)
             self._cm_updating = False
 
+    # ── Insert ────────────────────────────────────────────────────────────
     def _do_insert(self):
         file_path = self.le_file.text().strip()
         if self.rb_open.isChecked() and (not file_path or not os.path.exists(file_path)):
@@ -1419,7 +1213,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", "Please specify a file path to save.")
             return
         if not self.image_paths:
-            QMessageBox.warning(self, "Error", "No images in any group.")
+            QMessageBox.warning(self, "Error", "No images to insert.")
             return
 
         sheet_new = self.cb_new_sheet.isChecked()
@@ -1441,11 +1235,19 @@ class MainWindow(QMainWindow):
 
         crop = CROP_PRESETS.get(self.combo_crop.currentText())
 
+        # Determine insert position
+        insert_after_idx = None
+        if sheet_new and self.combo_insert_after.isVisible():
+            sel = self.combo_insert_after.currentIndex()
+            if sel > 0:
+                insert_after_idx = sel - 1  # 0 = "(at the end)", 1 = first sheet...
+
         params = {
             "excel_path": file_path if self.rb_open.isChecked() else None,
             "save_path": file_path,
             "sheet_new": sheet_new,
             "sheet_name": sheet_name,
+            "insert_after_idx": insert_after_idx,
             "groups": [dict(g) for g in self.groups],
             "resize_px_w": self._get_resize_px()[0],
             "resize_px_h": self._get_resize_px()[1],
