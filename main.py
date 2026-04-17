@@ -357,6 +357,194 @@ class ImageLoaderThread(QThread):
         self.finished.emit()
 
 
+# ── Thumbnail stack widget ─────────────────────────────────────────────────────
+class ThumbCard(QWidget):
+    delete_requested = pyqtSignal(str)
+    selection_toggled = pyqtSignal(str, bool)
+
+    def __init__(self, path, orig_mb, est_mb, w, h):
+        super().__init__()
+        self.path = path
+        self.orig_mb = orig_mb
+        self.est_mb = est_mb
+        self.img_w = w
+        self.img_h = h
+        self.selected = False
+        self._drag_start = None
+        self.pixmap = QPixmap(path).scaled(THUMB_SIZE, THUMB_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.setFixedSize(self.pixmap.width(), self.pixmap.height())
+        self.setToolTip(f"{Path(path).name}\n{w}x{h}\n{orig_mb:.2f} MB -> {est_mb:.2f} MB")
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.drawPixmap(0, 0, self.pixmap)
+        if self.selected:
+            p.setPen(QPen(QColor("#6366f1"), 3))
+            p.setBrush(Qt.NoBrush)
+            p.drawRect(1, 1, self.width() - 2, self.height() - 2)
+        bar_h = 18
+        bar_y = self.height() - bar_h
+        p.fillRect(0, bar_y, self.width(), bar_h, QColor(255, 255, 255, 200))
+        p.setFont(QFont("Arial", 8))
+        p.setPen(QColor("#333"))
+        p.drawText(4, bar_y, self.width() // 2, bar_h, Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.2f}MB")
+        p.setPen(QColor("#16a34a"))
+        p.drawText(self.width() // 2, bar_y, self.width() // 2 - 4, bar_h, Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.2f}MB")
+        btn_r = 9
+        cx = self.width() - btn_r - 4
+        cy = btn_r + 4
+        p.setBrush(QColor(255, 255, 255, 220))
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPoint(cx, cy), btn_r, btn_r)
+        p.setPen(QColor("#333"))
+        p.setFont(QFont("Arial", 9, QFont.Bold))
+        p.drawText(cx - btn_r, cy - btn_r, btn_r * 2, btn_r * 2, Qt.AlignCenter, "\u00d7")
+        p.end()
+
+    def mousePressEvent(self, event):
+        btn_r = 9
+        cx = self.width() - btn_r - 4
+        cy = btn_r + 4
+        if (event.pos().x() - cx) ** 2 + (event.pos().y() - cy) ** 2 <= (btn_r + 3) ** 2:
+            self.delete_requested.emit(self.path)
+            return
+        self._drag_start = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start and (event.pos() - self._drag_start).manhattanLength() > 10:
+            from PyQt5.QtCore import QMimeData
+            from PyQt5.QtGui import QDrag
+            drag = QDrag(self)
+            mime = QMimeData()
+            mime.setText(self.path)
+            drag.setMimeData(mime)
+            drag.setPixmap(self.pixmap.scaled(60, 60, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            drag.exec_(Qt.MoveAction)
+            self._drag_start = None
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_start:
+            self.selected = not self.selected
+            self.selection_toggled.emit(self.path, self.selected)
+            self.update()
+        self._drag_start = None
+
+
+class ThumbStackView(QScrollArea):
+    delete_requested = pyqtSignal(str)
+    order_changed = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__()
+        self.setWidgetResizable(True)
+        self.setAcceptDrops(True)
+        self.setStyleSheet("ThumbStackView { border: 1px solid palette(mid); border-radius: 6px; }")
+        self.container = QWidget()
+        self.container.setAcceptDrops(True)
+        self.flow = FlowLayout(self.container)
+        self.flow.setSpacing(8)
+        self.setWidget(self.container)
+        self.cards = []
+        self.selected_paths = set()
+        self._paths = []
+
+    def set_images(self, paths, max_w, max_h):
+        self.flow.clear_widgets()
+        for c in self.cards:
+            c.setParent(None)
+            c.deleteLater()
+        self.cards.clear()
+        self.selected_paths.clear()
+        self._paths = list(paths)
+        for path in paths:
+            orig_mb, est_mb, w, h = estimate_size(path, max_w, max_h)
+            card = ThumbCard(path, orig_mb, est_mb, w, h)
+            card.delete_requested.connect(self._on_delete)
+            card.selection_toggled.connect(self._on_selection)
+            self.cards.append(card)
+        self.flow.set_widgets(self.cards)
+
+    def _on_delete(self, path):
+        self.delete_requested.emit(path)
+
+    def _on_selection(self, path, selected):
+        if selected:
+            self.selected_paths.add(path)
+        else:
+            self.selected_paths.discard(path)
+
+    def get_selected(self):
+        return list(self.selected_paths)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasText():
+            event.acceptProposedAction()
+
+    def dragMoveEvent(self, event):
+        event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        src_path = event.mimeData().text()
+        if src_path not in self._paths:
+            return
+        drop_pos = self.container.mapFrom(self, event.pos())
+        target_idx = len(self._paths) - 1
+        for i, card in enumerate(self.cards):
+            if card.geometry().contains(drop_pos):
+                target_idx = i
+                break
+        src_idx = self._paths.index(src_path)
+        if src_idx == target_idx:
+            return
+        self._paths.pop(src_idx)
+        self._paths.insert(target_idx, src_path)
+        self.order_changed.emit(list(self._paths))
+        event.acceptProposedAction()
+
+
+class FlowLayout(QVBoxLayout):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._widgets = []
+
+    def clear_widgets(self):
+        self._widgets.clear()
+        while self.count():
+            item = self.takeAt(0)
+            if item.layout():
+                while item.layout().count():
+                    item.layout().takeAt(0)
+
+    def set_widgets(self, widgets):
+        self._widgets = list(widgets)
+        self._relayout()
+
+    def addWidget(self, widget):
+        self._widgets.append(widget)
+        self._relayout()
+
+    def _relayout(self):
+        while self.count():
+            item = self.takeAt(0)
+            if item.layout():
+                while item.layout().count():
+                    item.layout().takeAt(0)
+        if not self._widgets:
+            return
+        parent = self.parentWidget()
+        available_w = parent.width() if parent else 600
+        card_w = THUMB_SIZE + 10
+        cols = max(1, available_w // card_w)
+        row_lay = None
+        for i, w in enumerate(self._widgets):
+            if i % cols == 0:
+                row_lay = QHBoxLayout()
+                row_lay.setAlignment(Qt.AlignLeft)
+                super().addLayout(row_lay)
+            row_lay.addWidget(w)
+
+
 # ── Grid preview widget ───────────────────────────────────────────────────────
 class GridPreview(QWidget):
     HEADER_H = 16
@@ -627,9 +815,25 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_move_up)
         btn_row.addWidget(self.btn_move_down)
         btn_row.addStretch()
+
+        # View switcher
+        self.btn_view_list = QPushButton("List")
+        self.btn_view_detail = QPushButton("Details")
+        self.btn_view_stack = QPushButton("Stack")
+        for b in [self.btn_view_list, self.btn_view_detail, self.btn_view_stack]:
+            b.setCheckable(True)
+            b.setMaximumWidth(65)
+            b.setStyleSheet("QPushButton:checked{background:#6366f1;color:#fff;border-radius:4px;padding:3px 6px}")
+        self.btn_view_list.setChecked(True)
+        self.btn_view_list.clicked.connect(lambda: self._switch_view("list"))
+        self.btn_view_detail.clicked.connect(lambda: self._switch_view("detail"))
+        self.btn_view_stack.clicked.connect(lambda: self._switch_view("stack"))
+        btn_row.addWidget(self.btn_view_list)
+        btn_row.addWidget(self.btn_view_detail)
+        btn_row.addWidget(self.btn_view_stack)
         lay_img.addLayout(btn_row)
 
-        # Main tree view with expand/collapse groups
+        # View: List (thumbnails + groups)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["", "Name", "Size", "After", ""])
         self.tree.setIconSize(QSize(48, 48))
@@ -649,6 +853,34 @@ class MainWindow(QMainWindow):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         lay_img.addWidget(self.tree)
+
+        # View: Details (no thumbnails)
+        self.tree_detail = QTreeWidget()
+        self.tree_detail.setHeaderLabels(["", "Name", "Dimensions", "Size", "After", ""])
+        self.tree_detail.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree_detail.setRootIsDecorated(False)
+        self.tree_detail.setColumnWidth(0, 30)
+        self.tree_detail.setColumnWidth(1, 200)
+        self.tree_detail.setColumnWidth(2, 90)
+        self.tree_detail.setColumnWidth(3, 70)
+        self.tree_detail.setColumnWidth(4, 70)
+        self.tree_detail.setColumnWidth(5, 30)
+        self.tree_detail.header().setStretchLastSection(False)
+        self.tree_detail.header().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tree_detail.setMinimumHeight(200)
+        self.tree_detail.itemClicked.connect(self._on_tree_detail_click)
+        self.tree_detail.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree_detail.customContextMenuRequested.connect(self._on_tree_context_menu_detail)
+        self.tree_detail.hide()
+        lay_img.addWidget(self.tree_detail)
+
+        # View: Stack (thumbnail cards)
+        self.thumb_stack = ThumbStackView()
+        self.thumb_stack.delete_requested.connect(self._delete_by_path_flat)
+        self.thumb_stack.order_changed.connect(self._on_stack_reorder)
+        self.thumb_stack.setMinimumHeight(200)
+        self.thumb_stack.hide()
+        lay_img.addWidget(self.thumb_stack)
 
         # Bottom: count + total
         bottom_row = QHBoxLayout()
@@ -874,11 +1106,11 @@ class MainWindow(QMainWindow):
     def _rebuild_tree(self):
         max_w, max_h = self._get_resize_px()
         use_groups = self.cb_use_groups.isChecked()
-        self.tree.clear()
 
+        # ── List view ──
+        self.tree.clear()
         for gi, group in enumerate(self.groups):
             if use_groups:
-                # Group header row
                 collapsed = gi in self._collapsed_groups
                 icon = GROUP_ICON_COLLAPSED if collapsed else GROUP_ICON
                 grp_item = QTreeWidgetItem([
@@ -897,19 +1129,12 @@ class MainWindow(QMainWindow):
                 grp_item.setBackground(3, QColor("#e8f0fe"))
                 grp_item.setBackground(4, QColor("#e8f0fe"))
                 self.tree.addTopLevelItem(grp_item)
-
                 if collapsed:
                     continue
 
             for p in group["images"]:
                 orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
-                item = QTreeWidgetItem([
-                    "",
-                    Path(p).name,
-                    f"{orig_mb:.2f} MB",
-                    f"{est_mb:.2f} MB",
-                    "\u00d7"
-                ])
+                item = QTreeWidgetItem(["", Path(p).name, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
                 item.setData(0, self.TYPE_ROLE, "image")
                 item.setData(0, self.PATH_ROLE, p)
                 item.setData(0, self.GROUP_ROLE, gi)
@@ -920,7 +1145,95 @@ class MainWindow(QMainWindow):
                     pass
                 self.tree.addTopLevelItem(item)
 
+        # ── Detail view ──
+        self.tree_detail.clear()
+        for gi, group in enumerate(self.groups):
+            if use_groups:
+                collapsed = gi in self._collapsed_groups
+                icon = GROUP_ICON_COLLAPSED if collapsed else GROUP_ICON
+                grp_item = QTreeWidgetItem([icon, f"{group['title']} ({len(group['images'])})", "", "", "", ""])
+                grp_item.setData(0, self.TYPE_ROLE, "group")
+                grp_item.setData(0, self.GROUP_ROLE, gi)
+                grp_font = grp_item.font(1)
+                grp_font.setBold(True)
+                grp_item.setFont(1, grp_font)
+                for c in range(6):
+                    grp_item.setBackground(c, QColor("#e8f0fe"))
+                self.tree_detail.addTopLevelItem(grp_item)
+                if collapsed:
+                    continue
+            for p in group["images"]:
+                orig_mb, est_mb, w, h = estimate_size(p, max_w, max_h)
+                dim = f"{w}\u00d7{h}" if w else "?"
+                item = QTreeWidgetItem(["", Path(p).name, dim, f"{orig_mb:.2f} MB", f"{est_mb:.2f} MB", "\u00d7"])
+                item.setData(0, self.TYPE_ROLE, "image")
+                item.setData(0, self.PATH_ROLE, p)
+                item.setData(0, self.GROUP_ROLE, gi)
+                self.tree_detail.addTopLevelItem(item)
+
+        # ── Stack view ──
+        all_images = self.image_paths
+        self.thumb_stack.set_images(all_images, max_w, max_h)
+
         self._update_count()
+
+    def _switch_view(self, mode):
+        self.btn_view_list.setChecked(mode == "list")
+        self.btn_view_detail.setChecked(mode == "detail")
+        self.btn_view_stack.setChecked(mode == "stack")
+        self.tree.setVisible(mode == "list")
+        self.tree_detail.setVisible(mode == "detail")
+        self.thumb_stack.setVisible(mode == "stack")
+
+    def _on_tree_detail_click(self, item, col):
+        tp = item.data(0, self.TYPE_ROLE)
+        if tp == "group":
+            gi = item.data(0, self.GROUP_ROLE)
+            if col <= 1:
+                if gi in self._collapsed_groups:
+                    self._collapsed_groups.discard(gi)
+                else:
+                    self._collapsed_groups.add(gi)
+                self._rebuild_tree()
+        elif tp == "image" and col == 5:
+            path = item.data(0, self.PATH_ROLE)
+            if path:
+                self._delete_by_path(path, item.data(0, self.GROUP_ROLE))
+
+    def _on_tree_context_menu_detail(self, pos):
+        item = self.tree_detail.itemAt(pos)
+        if not item:
+            return
+        tp = item.data(0, self.TYPE_ROLE)
+        menu = QMenu(self)
+        if tp == "group":
+            gi = item.data(0, self.GROUP_ROLE)
+            menu.addAction("Rename group", lambda: self._rename_group(gi))
+            if len(self.groups) > 1:
+                menu.addAction("Delete group", lambda: self._delete_group(gi))
+        elif tp == "image":
+            path = item.data(0, self.PATH_ROLE)
+            gi = item.data(0, self.GROUP_ROLE)
+            if self.cb_use_groups.isChecked() and len(self.groups) > 1:
+                move_menu = menu.addMenu("Move to group...")
+                for i, g in enumerate(self.groups):
+                    if i != gi:
+                        move_menu.addAction(g["title"], lambda p=path, src=gi, dst=i: self._move_image_to_group(p, src, dst))
+            menu.addAction("Remove", lambda: self._delete_by_path(path, gi))
+        menu.exec_(self.tree_detail.viewport().mapToGlobal(pos))
+
+    def _delete_by_path_flat(self, path):
+        """Delete from stack view — find which group has it."""
+        for gi, g in enumerate(self.groups):
+            if path in g["images"]:
+                self._delete_by_path(path, gi)
+                return
+
+    def _on_stack_reorder(self, new_order):
+        """Reorder from stack view — applies to first group only in flat mode."""
+        if not self.cb_use_groups.isChecked() and len(self.groups) == 1:
+            self.groups[0]["images"] = new_order
+            self._rebuild_tree()
 
     def _on_tree_click(self, item, col):
         tp = item.data(0, self.TYPE_ROLE)
