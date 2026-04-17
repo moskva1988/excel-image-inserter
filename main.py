@@ -893,8 +893,13 @@ class MainWindow(QMainWindow):
         self.thumb_stack.hide()
         lay_img.addWidget(self.thumb_stack)
 
-        # Bottom: count + total
+        # Bottom: separator + count + total (fixed below tree)
+        sep_line = QFrame()
+        sep_line.setFrameShape(QFrame.HLine)
+        sep_line.setFrameShadow(QFrame.Sunken)
+        lay_img.addWidget(sep_line)
         bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(4, 2, 4, 2)
         self.lbl_img_count = QLabel("0 images")
         self.lbl_total_size = QLabel("")
         self.lbl_total_size.setStyleSheet("color:#999")
