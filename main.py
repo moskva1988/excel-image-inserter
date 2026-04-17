@@ -833,6 +833,17 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_view_stack)
         lay_img.addLayout(btn_row)
 
+        # Active group selector
+        group_sel_row = QHBoxLayout()
+        self.lbl_active_group = QLabel("Add to group:")
+        self.lbl_active_group.hide()
+        self.combo_active_group = QComboBox()
+        self.combo_active_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.combo_active_group.hide()
+        group_sel_row.addWidget(self.lbl_active_group)
+        group_sel_row.addWidget(self.combo_active_group)
+        lay_img.addLayout(group_sel_row)
+
         # View: List (thumbnails + groups)
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["", "Name", "Size", "After", ""])
@@ -1076,6 +1087,8 @@ class MainWindow(QMainWindow):
     def _on_group_mode_toggled(self, enabled):
         self.btn_add_group.setVisible(enabled)
         self.cb_toc.setVisible(enabled)
+        self.lbl_active_group.setVisible(enabled)
+        self.combo_active_group.setVisible(enabled)
         if not enabled:
             all_images = self.image_paths
             self.groups = [{"title": "All Images", "images": all_images}]
@@ -1087,6 +1100,8 @@ class MainWindow(QMainWindow):
         if ok and name.strip():
             self.groups.append({"title": name.strip(), "images": []})
             self._rebuild_tree()
+            # Auto-select newly created group
+            self.combo_active_group.setCurrentIndex(len(self.groups) - 1)
             self._on_settings_changed()
 
     def _get_selected_group_idx(self):
@@ -1106,6 +1121,18 @@ class MainWindow(QMainWindow):
     def _rebuild_tree(self):
         max_w, max_h = self._get_resize_px()
         use_groups = self.cb_use_groups.isChecked()
+
+        # ── Update group selector combo ──
+        prev_idx = self.combo_active_group.currentIndex()
+        self.combo_active_group.blockSignals(True)
+        self.combo_active_group.clear()
+        for gi, group in enumerate(self.groups):
+            self.combo_active_group.addItem(group["title"], gi)
+        if 0 <= prev_idx < len(self.groups):
+            self.combo_active_group.setCurrentIndex(prev_idx)
+        elif self.groups:
+            self.combo_active_group.setCurrentIndex(len(self.groups) - 1)
+        self.combo_active_group.blockSignals(False)
 
         # ── List view ──
         self.tree.clear()
@@ -1351,8 +1378,11 @@ class MainWindow(QMainWindow):
 
     # ── Image management ──────────────────────────────────────────────────
     def _add_images(self):
-        gi = self._get_selected_group_idx()
-        if gi < 0:
+        if self.cb_use_groups.isChecked():
+            gi = self.combo_active_group.currentData()
+            if gi is None:
+                gi = 0
+        else:
             gi = 0
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Select Images", "",
