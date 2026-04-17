@@ -711,6 +711,21 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setSpacing(6)
 
+        # ── Top header with title + About button ──────────────────────────
+        top_header = QHBoxLayout()
+        top_header.addStretch()
+        self.btn_about = QPushButton("?")
+        self.btn_about.setFixedSize(24, 24)
+        self.btn_about.setToolTip("About")
+        self.btn_about.setStyleSheet(
+            "QPushButton { border: 1px solid palette(mid); border-radius: 12px; "
+            "font-weight: bold; font-size: 13px; }"
+            "QPushButton:hover { background: palette(midlight); }"
+        )
+        self.btn_about.clicked.connect(self._show_about)
+        top_header.addWidget(self.btn_about)
+        root.addLayout(top_header)
+
         # ── Excel file ─────────────────────────────────────────────────────
         grp_file = QGroupBox("Excel File (.xlsx only)")
         lay_file = QVBoxLayout(grp_file)
@@ -1047,11 +1062,7 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.btn_insert)
         root.addLayout(action_row)
 
-        # About
-        about_lbl = QLabel(f"v{APP_VERSION} (build {BUILD_NUMBER})  |  I.Moskvin using Claude Opus 4.6")
-        about_lbl.setStyleSheet("color: #999; font-size: 10px; padding: 2px 0;")
-        about_lbl.setAlignment(Qt.AlignCenter)
-        root.addWidget(about_lbl)
+        # (About is shown via ? button in top header)
 
         self._rebuild_tree()
 
@@ -1529,6 +1540,16 @@ class MainWindow(QMainWindow):
     def _on_resize_changed(self, *_):
         if self.image_paths:
             self._rebuild_tree()
+
+    def _show_about(self):
+        QMessageBox.about(
+            self, "About Excel Image Inserter",
+            f"<h3>Excel Image Inserter</h3>"
+            f"<p>Version {APP_VERSION} (build {BUILD_NUMBER})</p>"
+            f"<p>Created by I.Moskvin using Claude Opus 4.6</p>"
+            f"<p>Batch insert images into Excel .xlsx files<br>"
+            f"with grouping, TOC, and layout control.</p>"
+        )
 
     def _on_settings_changed(self, *_):
         crop_key = self.combo_crop.currentText()
