@@ -989,22 +989,18 @@ class MainWindow(QMainWindow):
         self.thumb_stack.hide()
         lay_img.addWidget(self.thumb_stack)
 
-        # Bottom: separator + count + total (fixed below tree)
-        sep_line = QFrame()
-        sep_line.setFrameShape(QFrame.HLine)
-        sep_line.setFrameShadow(QFrame.Sunken)
-        lay_img.addWidget(sep_line)
-        bottom_row = QHBoxLayout()
-        bottom_row.setContentsMargins(4, 2, 4, 2)
+        root.addWidget(grp_img, 1)
+
+        # Image stats bar (outside the Images group box)
+        stats_row = QHBoxLayout()
+        stats_row.setContentsMargins(4, 0, 4, 0)
         self.lbl_img_count = QLabel("0 images")
         self.lbl_total_size = QLabel("")
         self.lbl_total_size.setStyleSheet("color:#999")
-        bottom_row.addWidget(self.lbl_img_count)
-        bottom_row.addStretch()
-        bottom_row.addWidget(self.lbl_total_size)
-        lay_img.addLayout(bottom_row)
-
-        root.addWidget(grp_img, 1)
+        stats_row.addWidget(self.lbl_img_count)
+        stats_row.addStretch()
+        stats_row.addWidget(self.lbl_total_size)
+        root.addLayout(stats_row)
 
         # ── Settings: Resize + Display in one row ──────────────────────────
         settings_row = QHBoxLayout()
