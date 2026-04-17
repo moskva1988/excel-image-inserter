@@ -139,7 +139,23 @@ class InsertWorker(QThread):
         processed = 0
         current_row = start_row
 
+        # Reserve rows for inline sheet TOC (collapsible group list)
+        inline_toc = use_groups and p.get("create_toc", False)
+        inline_toc_start = None
+        if inline_toc:
+            # Row for "Contents" label
+            col_letter = get_column_letter(start_col_idx)
+            ws[f"{col_letter}{current_row}"] = "\u25b8 Contents"
+            ws[f"{col_letter}{current_row}"].font = XLFont(bold=True, size=11, color="1F4E79")
+            current_row += 1
+            inline_toc_start = current_row
+            # Reserve one row per group (will fill with links after placing images)
+            for _ in groups:
+                current_row += 1
+            current_row += 1  # blank row before images
+
         toc_entries = []
+        group_header_rows = []  # track header row for each group
 
         for group in groups:
             title = group["title"]
@@ -152,6 +168,7 @@ class InsertWorker(QThread):
                 ws[header_cell].alignment = XLAlignment(vertical="center")
                 ws.row_dimensions[current_row].height = 22
                 toc_entries.append((title, sheet_name, header_cell))
+                group_header_rows.append(current_row)
                 current_row += 1
 
             for i, img_path in enumerate(images):
@@ -250,6 +267,19 @@ class InsertWorker(QThread):
 
             if use_groups:
                 current_row += 1
+
+        # ── Inline sheet TOC (collapsible) ───────────────────────────────
+        if inline_toc and group_header_rows:
+            col_letter = get_column_letter(start_col_idx)
+            for gi, (group, header_row) in enumerate(zip(groups, group_header_rows)):
+                toc_r = inline_toc_start + gi
+                cell = f"{col_letter}{toc_r}"
+                ws[cell] = f"    {group['title']}"
+                ws[cell].font = XLFont(size=10, color="0563C1", underline="single")
+                ws[cell].hyperlink = f"#'{sheet_name}'!{col_letter}{header_row}"
+            # Group and collapse the TOC rows
+            ws.row_dimensions.group(inline_toc_start, inline_toc_start + len(groups) - 1,
+                                    hidden=True, outline_level=1)
 
         # ── TOC sheet ─────────────────────────────────────────────────────
         if p.get("create_toc", False) and toc_entries:
