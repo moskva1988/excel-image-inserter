@@ -121,10 +121,11 @@ class InsertWorker(QThread):
         if p["sheet_new"]:
             ws = wb.create_sheet(title=sheet_name)
             # Move sheet to requested position
-            insert_after = p.get("insert_after_idx", None)
-            if insert_after is not None and insert_after >= 0:
-                # Move to position after insert_after
-                wb.move_sheet(ws, offset=insert_after - len(wb.sheetnames) + 2)
+            insert_after_name = p.get("insert_after_name", None)
+            if insert_after_name and insert_after_name in wb.sheetnames:
+                target_idx = wb.sheetnames.index(insert_after_name) + 1
+                current_idx = len(wb.sheetnames) - 1
+                wb.move_sheet(ws, offset=target_idx - current_idx)
         else:
             ws = wb[sheet_name]
 
@@ -262,47 +263,96 @@ class InsertWorker(QThread):
             header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
             sheet_fill = PatternFill(start_color="E8F0FE", end_color="E8F0FE", fill_type="solid")
 
-            if toc_name in wb.sheetnames:
+            toc_existed = toc_name in wb.sheetnames
+            if toc_existed:
                 toc_ws = wb[toc_name]
-                # Find the last used row to append
-                toc_row = toc_ws.max_row + 2
             else:
                 toc_ws = wb.create_sheet(title=toc_name, index=0)
-                # Title row
-                toc_ws["A1"] = "Contents"
-                toc_ws["A1"].font = XLFont(bold=True, size=16, color="FFFFFF")
-                toc_ws["A1"].fill = header_fill
-                toc_ws["A1"].alignment = XLAlignment(vertical="center")
-                toc_ws["B1"].fill = header_fill
-                toc_ws["C1"].fill = header_fill
-                toc_ws.row_dimensions[1].height = 32
-                toc_ws.column_dimensions["A"].width = 6
-                toc_ws.column_dimensions["B"].width = 40
-                toc_ws.column_dimensions["C"].width = 15
-                toc_row = 3
 
-            # Find position of this sheet among all sheets for correct ordering
-            sheet_idx = wb.sheetnames.index(sheet_name) if sheet_name in wb.sheetnames else -1
+            # Collect existing TOC entries from other sheets (by scanning TOC rows)
+            existing_sections = []  # [(sheet_name, [(title, cell_ref)])]
+            if toc_existed:
+                r = 2
+                max_r = toc_ws.max_row
+                while r <= max_r:
+                    cell_val = toc_ws[f"A{r}"].value
+                    if cell_val and str(cell_val).startswith("\u25b8"):
+                        sec_name = str(cell_val)[2:].strip()
+                        sec_entries = []
+                        r += 1
+                        while r <= max_r:
+                            b_val = toc_ws[f"B{r}"].value
+                            if not b_val:
+                                r += 1
+                                break
+                            a_val = toc_ws[f"A{r}"].value
+                            if a_val and str(a_val).startswith("\u25b8"):
+                                break
+                            link = toc_ws[f"B{r}"].hyperlink
+                            href = link.target if link else f"#'{sec_name}'!A1"
+                            sec_entries.append((str(b_val), sec_name, href))
+                            r += 1
+                        existing_sections.append((sec_name, sec_entries))
+                    else:
+                        r += 1
 
-            # Sheet name row
-            toc_ws[f"A{toc_row}"] = f"\u25b8 {sheet_name}"
-            toc_ws[f"A{toc_row}"].font = XLFont(bold=True, size=11, color="1F4E79")
-            toc_ws[f"A{toc_row}"].fill = sheet_fill
-            toc_ws[f"B{toc_row}"].fill = sheet_fill
-            toc_ws[f"C{toc_row}"].fill = sheet_fill
-            toc_ws[f"A{toc_row}"].hyperlink = f"#'{sheet_name}'!A1"
-            toc_ws[f"A{toc_row}"].border = thin_border
-            toc_ws[f"B{toc_row}"].border = thin_border
-            toc_ws.row_dimensions[toc_row].height = 22
-            toc_row += 1
+            # Replace or add the current sheet's section
+            new_section = (sheet_name, [(t, sn, f"#'{sn}'!{cr}") for t, sn, cr in toc_entries])
+            replaced = False
+            for i, (sn, _) in enumerate(existing_sections):
+                if sn == sheet_name:
+                    existing_sections[i] = new_section
+                    replaced = True
+                    break
+            if not replaced:
+                existing_sections.append(new_section)
 
-            for title, sn, cell_ref in toc_entries:
-                toc_ws[f"B{toc_row}"] = title
-                toc_ws[f"B{toc_row}"].font = XLFont(size=10, color="0563C1", underline="single")
-                toc_ws[f"B{toc_row}"].hyperlink = f"#'{sn}'!{cell_ref}"
-                toc_ws[f"B{toc_row}"].border = thin_border
+            # Sort sections by workbook sheet order
+            sheet_order = {name: idx for idx, name in enumerate(wb.sheetnames)}
+            existing_sections.sort(key=lambda s: sheet_order.get(s[0], 999))
+
+            # Clear and rewrite entire TOC
+            for row in toc_ws.iter_rows(min_row=1, max_row=toc_ws.max_row, max_col=3):
+                for cell in row:
+                    cell.value = None
+                    cell.font = XLFont()
+                    cell.fill = PatternFill()
+                    cell.border = Border()
+                    cell.hyperlink = None
+                    cell.alignment = XLAlignment()
+
+            # Header
+            toc_ws["A1"] = "Contents"
+            toc_ws["A1"].font = XLFont(bold=True, size=16, color="FFFFFF")
+            toc_ws["A1"].fill = header_fill
+            toc_ws["A1"].alignment = XLAlignment(vertical="center")
+            toc_ws["B1"].fill = header_fill
+            toc_ws["C1"].fill = header_fill
+            toc_ws.row_dimensions[1].height = 32
+            toc_ws.column_dimensions["A"].width = 6
+            toc_ws.column_dimensions["B"].width = 40
+            toc_ws.column_dimensions["C"].width = 15
+
+            toc_row = 3
+            for sec_name, sec_entries in existing_sections:
+                toc_ws[f"A{toc_row}"] = f"\u25b8 {sec_name}"
+                toc_ws[f"A{toc_row}"].font = XLFont(bold=True, size=11, color="1F4E79")
+                toc_ws[f"A{toc_row}"].fill = sheet_fill
+                toc_ws[f"B{toc_row}"].fill = sheet_fill
+                toc_ws[f"C{toc_row}"].fill = sheet_fill
+                toc_ws[f"A{toc_row}"].hyperlink = f"#'{sec_name}'!A1"
                 toc_ws[f"A{toc_row}"].border = thin_border
+                toc_ws[f"B{toc_row}"].border = thin_border
+                toc_ws.row_dimensions[toc_row].height = 22
                 toc_row += 1
+                for title, sn, href in sec_entries:
+                    toc_ws[f"B{toc_row}"] = title
+                    toc_ws[f"B{toc_row}"].font = XLFont(size=10, color="0563C1", underline="single")
+                    toc_ws[f"B{toc_row}"].hyperlink = href
+                    toc_ws[f"B{toc_row}"].border = thin_border
+                    toc_ws[f"A{toc_row}"].border = thin_border
+                    toc_row += 1
+                toc_row += 1  # blank row between sections
 
         save_path = p["save_path"] or p["excel_path"]
         self.status.emit(f"Saving {save_path}...")
@@ -1627,18 +1677,18 @@ class MainWindow(QMainWindow):
         crop = CROP_PRESETS.get(self.combo_crop.currentText())
 
         # Determine insert position
-        insert_after_idx = None
+        insert_after_name = None
         if sheet_new and self.combo_insert_after.isVisible():
             sel = self.combo_insert_after.currentIndex()
             if sel > 0:
-                insert_after_idx = sel - 1  # 0 = "(at the end)", 1 = first sheet...
+                insert_after_name = self.combo_insert_after.currentText()
 
         params = {
             "excel_path": file_path if self.rb_open.isChecked() else None,
             "save_path": file_path,
             "sheet_new": sheet_new,
             "sheet_name": sheet_name,
-            "insert_after_idx": insert_after_idx,
+            "insert_after_name": insert_after_name,
             "groups": [dict(g) for g in self.groups],
             "resize_px_w": self._get_resize_px()[0],
             "resize_px_h": self._get_resize_px()[1],
