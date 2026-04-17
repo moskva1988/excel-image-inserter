@@ -1123,11 +1123,20 @@ class MainWindow(QMainWindow):
                 grp_font = grp_item.font(1)
                 grp_font.setBold(True)
                 grp_item.setFont(1, grp_font)
-                grp_item.setBackground(0, QColor("#e8f0fe"))
-                grp_item.setBackground(1, QColor("#e8f0fe"))
-                grp_item.setBackground(2, QColor("#e8f0fe"))
-                grp_item.setBackground(3, QColor("#e8f0fe"))
-                grp_item.setBackground(4, QColor("#e8f0fe"))
+                base = self.palette().color(self.backgroundRole())
+                is_dark = base.lightnessF() < 0.5
+                if is_dark:
+                    grp_bg = QColor(base.red() + (255 - base.red()) // 5,
+                                    base.green() + (255 - base.green()) // 5,
+                                    base.blue() + (255 - base.blue()) // 5)
+                else:
+                    grp_bg = QColor(base.red() - base.red() // 10,
+                                    base.green() - base.green() // 10,
+                                    base.blue() - base.blue() // 10)
+                grp_fg = QColor(Qt.white) if is_dark else QColor(Qt.black)
+                for c in range(5):
+                    grp_item.setBackground(c, grp_bg)
+                    grp_item.setForeground(c, grp_fg)
                 self.tree.addTopLevelItem(grp_item)
                 if collapsed:
                     continue
@@ -1157,8 +1166,20 @@ class MainWindow(QMainWindow):
                 grp_font = grp_item.font(1)
                 grp_font.setBold(True)
                 grp_item.setFont(1, grp_font)
+                base = self.palette().color(self.backgroundRole())
+                is_dark = base.lightnessF() < 0.5
+                if is_dark:
+                    grp_bg = QColor(base.red() + (255 - base.red()) // 5,
+                                    base.green() + (255 - base.green()) // 5,
+                                    base.blue() + (255 - base.blue()) // 5)
+                else:
+                    grp_bg = QColor(base.red() - base.red() // 10,
+                                    base.green() - base.green() // 10,
+                                    base.blue() - base.blue() // 10)
+                grp_fg = QColor(Qt.white) if is_dark else QColor(Qt.black)
                 for c in range(6):
-                    grp_item.setBackground(c, QColor("#e8f0fe"))
+                    grp_item.setBackground(c, grp_bg)
+                    grp_item.setForeground(c, grp_fg)
                 self.tree_detail.addTopLevelItem(grp_item)
                 if collapsed:
                     continue
