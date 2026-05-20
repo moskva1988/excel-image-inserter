@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QMessageBox,
     QGridLayout, QSizePolicy,
     QTreeWidget, QTreeWidgetItem, QHeaderView,
-    QInputDialog, QMenu,
+    QInputDialog, QMenu, QStackedWidget,
 )
 from PyQt5.QtCore import Qt, QSize, QSettings
 from PyQt5.QtGui import QPixmap, QIcon, QColor, QFont
@@ -20,6 +20,7 @@ from qfluentwidgets import (
     CheckBox, RadioButton, SpinBox, DoubleSpinBox, ProgressBar,
     BodyLabel, StrongBodyLabel, TitleLabel, CaptionLabel,
     CardWidget, FluentIcon, setTheme, Theme, isDarkTheme, themeColor,
+    SegmentedWidget,
 )
 
 from app.core.models import APP_VERSION, BUILD_NUMBER, CROP_PRESETS, GROUP_ICON, GROUP_ICON_COLLAPSED
@@ -27,6 +28,7 @@ from app.core.image_processor import estimate_size
 from app.core.excel_writer import InsertWorker
 from app.ui.grid_preview import GridPreview
 from app.ui.image_list import ThumbStackView
+from app.ui.batch_tab import BatchProcessorTab
 
 
 def _make_card(title: str = "") -> tuple:
@@ -68,13 +70,13 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
-        root.setSpacing(6)
+        outer = QVBoxLayout(central)
+        outer.setSpacing(6)
 
-        # ── Excel file ─────────────────────────────────────────────────────
-        # Header row: title + theme switcher + about button on same line
+        # ── Top header (shared across tabs): title + theme + about ─────────
         file_header = QHBoxLayout()
-        file_header.addWidget(TitleLabel("Excel File"))
+        self.lbl_app_title = TitleLabel("Excel Image Inserter")
+        file_header.addWidget(self.lbl_app_title)
         file_header.addStretch()
         file_header.addWidget(CaptionLabel("Theme:"))
         self.combo_theme = ComboBox()
@@ -90,7 +92,38 @@ class MainWindow(QMainWindow):
         self.btn_about.setToolTip("About")
         self.btn_about.clicked.connect(self._show_about)
         file_header.addWidget(self.btn_about)
-        root.addLayout(file_header)
+        outer.addLayout(file_header)
+
+        # ── Tab switcher (SegmentedWidget) ─────────────────────────────────
+        # SegmentedWidget chosen over Pivot for a cleaner two-tab toggle and
+        # an addItem signature (routeKey, text, onClick) that maps directly
+        # to a QStackedWidget index.
+        self.tab_switcher = SegmentedWidget()
+        self.tab_switcher.addItem("excel", "Excel Inserter",
+                                  lambda: self.tab_stack.setCurrentIndex(0))
+        self.tab_switcher.addItem("batch", "Batch Processor",
+                                  lambda: self.tab_stack.setCurrentIndex(1))
+        outer.addWidget(self.tab_switcher)
+
+        # ── Stacked pages: Excel (existing) + Batch (new) ──────────────────
+        self.tab_stack = QStackedWidget()
+        outer.addWidget(self.tab_stack, 1)
+
+        excel_page = QWidget()
+        root = QVBoxLayout(excel_page)
+        root.setSpacing(6)
+        root.setContentsMargins(0, 0, 0, 0)
+        self.tab_stack.addWidget(excel_page)
+
+        self.batch_tab = BatchProcessorTab()
+        self.tab_stack.addWidget(self.batch_tab)
+        self.tab_switcher.setCurrentItem("excel")
+        self.tab_stack.setCurrentIndex(0)
+
+        # The "Excel File" title used to live in the top header. Now that
+        # the top header is shared and shows the app name, surface a small
+        # section heading on this page instead.
+        root.addWidget(StrongBodyLabel("Excel File"))
 
         grp_file, lay_file = _make_card()
         lay_file.setSpacing(6)

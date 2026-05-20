@@ -42,6 +42,7 @@ jobs:
             --name "Excel Image Inserter" \
             --icon icon.icns \
             --collect-all qfluentwidgets \
+            --hidden-import=piexif \
             main.py
       - name: Zip .app
         run: |
@@ -65,7 +66,7 @@ jobs:
           pip install -r requirements.txt
       - name: Build .exe
         run: |
-          pyinstaller --onefile --windowed --name "ExcelImageInserter" --icon icon.ico --collect-all qfluentwidgets main.py
+          pyinstaller --onefile --windowed --name "ExcelImageInserter" --icon icon.ico --collect-all qfluentwidgets --hidden-import=win32file --hidden-import=win32con --hidden-import=pywintypes --hidden-import=piexif main.py
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build

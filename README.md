@@ -66,6 +66,20 @@ The tool is aimed at anyone who regularly needs to produce image catalogs, produ
 - Help **"?"** button with an About dialog (version, build number)
 - No internet connection required; no telemetry
 
+### Image Batch Processor (second tab)
+
+A folder-to-folder image-processing workflow that doesn't touch Excel at all. Point it at an input folder, configure the pipeline, click **Process Images**, and the results are written to an output folder (or back over the originals if you opt in).
+
+- **Input / output folders** — pick a source folder and a destination folder, or check **Overwrite originals** to modify files in place
+- **Resize** — leave untouched, resize by long side (px), by percentage, or to exact W × H dimensions (with optional aspect-ratio lock)
+- **Crop** — same presets as the Excel tab (1:1, 4:3, 3:2, 16:9, 3:4, 2:3, 9:16) plus a custom W:H ratio
+- **Metadata** — set Created and Modified timestamps, with an option to apply the same value to both, plus an optional write to EXIF `DateTimeOriginal` for JPEG/TIFF photos
+- **Watermark — Date mode** — render a date stamp in any of 13 formats (ISO, US, EU, full month, uppercase short month, etc.), pick color (presets or custom), font, size (1–20 % of image width), one of seven positions, opacity, margin, and an optional shadow/outline for readability
+- **Watermark — Image mode** — overlay a PNG (transparency respected) with configurable size (% of image width), opacity, position, and margin
+- **Per-file error handling** — a failing image is logged and the batch keeps going; the summary at the end shows how many succeeded and which ones failed
+
+> Note: setting the **Created** date is only supported on Windows (via `pywin32`). On macOS, only the **Modified** date is changed.
+
 ---
 
 ## Installation
@@ -106,8 +120,11 @@ python main.py
 | Package | Version | Purpose |
 |---|---|---|
 | PyQt5 | ≥ 5.15 | GUI framework |
+| PyQt-Fluent-Widgets | 1.11.2 | Fluent-styled widgets + Light/Dark themes |
 | openpyxl | ≥ 3.1 | Excel file read/write |
 | Pillow | ≥ 10.0 | Image processing |
+| piexif | ≥ 1.1 | EXIF metadata write (Batch Processor) |
+| pywin32 | ≥ 305 | Created-date file metadata (Windows only) |
 
 ---
 
@@ -158,6 +175,10 @@ Use the **Add Group** button to create a named category. Select images in the li
 ### Step 7 — Export
 
 Click **Export to Excel**. A progress bar tracks the operation. When complete, the app reports the output file path.
+
+### Alternative — use the Batch Processor tab
+
+Switch to the **Batch Processor** tab at the top of the window to process images folder-to-folder without Excel: resize, crop, retouch metadata, and apply date or PNG watermarks across a whole directory in one pass.
 
 <!-- ![Step 7](docs/screenshots/step-7.png) -->
 
@@ -211,28 +232,39 @@ pyinstaller --windowed --name "Excel Image Inserter" --icon icon.icns main.py
 
 ```
 excel-image-inserter/
-├── main.py                  # Application entry point (monolithic, ~single file)
-├── icon.ico                 # Windows application icon
-├── icon.png                 # Source icon (used to generate .icns for macOS)
-├── requirements.txt         # Python dependencies
-├── LICENSE                  # MIT License
-├── .github/
-│   └── workflows/
-│       └── build.yml        # CI/CD: build Windows .exe and macOS .app on tag push
-└── docs/
-    └── screenshots/         # Placeholder — screenshots added in Phase 6
+├── main.py                       # Entry point: QApplication, HiDPI, theme, MainWindow
+├── app/
+│   ├── ui/
+│   │   ├── main_window.py        # Two-tab main window (Excel + Batch)
+│   │   ├── batch_tab.py          # Batch Processor tab UI
+│   │   ├── grid_preview.py       # Live grid preview widget (Excel tab)
+│   │   └── image_list.py         # Stack view for thumbnails (Excel tab)
+│   └── core/
+│       ├── models.py             # Shared constants (crop presets, version)
+│       ├── image_processor.py    # Image sizing helpers + loader thread
+│       ├── excel_writer.py       # Excel insertion worker
+│       └── batch_processor.py    # Folder-to-folder Batch Processor worker
+├── icon.ico                       # Windows application icon
+├── icon.png                       # Source icon (used to generate .icns for macOS)
+├── requirements.txt               # Python dependencies
+├── LICENSE                        # MIT License
+├── .github/workflows/build.yml    # CI/CD: build Windows .exe and macOS .app on tag push
+└── docs/screenshots/              # Placeholder — screenshots added in Phase 6
 ```
-
-> Note: the codebase is currently a single `main.py` file. A modular split into separate files (UI, worker, export logic, etc.) is planned — see [Roadmap](#roadmap).
 
 ---
 
 ## Roadmap
 
-- **Modular code split** — extract UI panels, export worker, and image-processing logic into separate modules (in progress)
-- **Modern Fluent UI** with Light and Dark theme support
-- **Image Batch Processor module** — folder-to-folder workflow: resize, crop, metadata editing, date/image watermarks — independent of Excel output
 - **Screenshots** added to documentation after the UI refresh (Phase 6)
+- Per-file overrides in the Batch Processor (e.g. apply different watermark text per filename)
+- Drag-and-drop folder input
+
+Already shipped:
+
+- Modular code split — UI panels, export worker, and image-processing logic in separate modules
+- Modern Fluent UI with Light / Dark theme support
+- **Image Batch Processor module** — folder-to-folder workflow (resize, crop, metadata, date / image watermark) independent of Excel output
 
 ---
 
