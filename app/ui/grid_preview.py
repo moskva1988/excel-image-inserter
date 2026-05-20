@@ -5,6 +5,15 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPainter, QPen, QColor, QFont
 from openpyxl.utils import get_column_letter
 
+try:
+    from qfluentwidgets import isDarkTheme, themeColor
+except Exception:  # pragma: no cover — fallback if qfluentwidgets is missing
+    def isDarkTheme():
+        return False
+
+    def themeColor():
+        return QColor("#6366f1")
+
 
 # ── Grid preview widget ───────────────────────────────────────────────────────
 class GridPreview(QWidget):
@@ -40,7 +49,9 @@ class GridPreview(QWidget):
         total_h = self.height()
         hh = self.HEADER_H
         rw = self.ROW_NUM_W
-        painter.fillRect(self.rect(), QColor("#f0f0f0"))
+        dark = isDarkTheme()
+        bg_col = QColor("#2b2b2b") if dark else QColor("#f0f0f0")
+        painter.fillRect(self.rect(), bg_col)
 
         total_images = sum(len(g["images"]) for g in self.groups)
         if total_images == 0:
@@ -70,11 +81,13 @@ class GridPreview(QWidget):
         current_row = self.start_row - 1
         img_num = 0
 
+        title_col = QColor("#e8e8e8") if dark else QColor("#1a1a1a")
+        accent = themeColor()
         for g in self.groups:
             if self.use_groups:
                 hx = rw + start_col_idx * cell_w + 2
                 hy = hh + current_row * cell_h
-                painter.setPen(QColor("#1a1a1a"))
+                painter.setPen(title_col)
                 painter.setFont(QFont("Arial", 7, QFont.Bold))
                 painter.drawText(int(hx), int(hy), int(cell_w * self.cols), int(cell_h),
                                  Qt.AlignLeft | Qt.AlignVCenter, g["title"])
@@ -101,7 +114,7 @@ class GridPreview(QWidget):
                         ih, iw = ch, ch * img_aspect
                     ix = cx + (cw - iw) / 2
                     iy = cy + (ch - ih) / 2
-                    painter.fillRect(int(ix), int(iy), int(iw), int(ih), QColor("#6366f1"))
+                    painter.fillRect(int(ix), int(iy), int(iw), int(ih), accent)
                     painter.setPen(QColor("#fff"))
                     painter.setFont(QFont("Arial", 7))
                     painter.drawText(int(ix), int(iy), int(iw), int(ih), Qt.AlignCenter, str(img_num))
@@ -115,20 +128,33 @@ class GridPreview(QWidget):
         grid_h = total_h - hh
         cell_w = grid_w / show_cols if show_cols else grid_w
         cell_h = grid_h / show_rows if show_rows else grid_h
-        painter.fillRect(rw, 0, int(grid_w), hh, QColor("#e0e0e0"))
-        painter.fillRect(0, hh, rw, int(grid_h), QColor("#e0e0e0"))
-        painter.fillRect(0, 0, rw, hh, QColor("#d0d0d0"))
-        painter.setPen(QPen(QColor("#c0c0c0"), 1))
+        dark = isDarkTheme()
+        if dark:
+            head_bg = QColor("#3a3a3a")
+            corner_bg = QColor("#454545")
+            line_col = QColor("#555555")
+            divider_col = QColor("#777777")
+            text_col = QColor("#dcdcdc")
+        else:
+            head_bg = QColor("#e0e0e0")
+            corner_bg = QColor("#d0d0d0")
+            line_col = QColor("#c0c0c0")
+            divider_col = QColor("#999")
+            text_col = QColor("#333")
+        painter.fillRect(rw, 0, int(grid_w), hh, head_bg)
+        painter.fillRect(0, hh, rw, int(grid_h), head_bg)
+        painter.fillRect(0, 0, rw, hh, corner_bg)
+        painter.setPen(QPen(line_col, 1))
         for c in range(show_cols + 1):
             x = int(rw + c * cell_w)
             painter.drawLine(x, 0, x, total_h)
         for r in range(show_rows + 1):
             y = int(hh + r * cell_h)
             painter.drawLine(0, y, total_w, y)
-        painter.setPen(QPen(QColor("#999"), 1))
+        painter.setPen(QPen(divider_col, 1))
         painter.drawLine(0, hh, total_w, hh)
         painter.drawLine(rw, 0, rw, total_h)
-        painter.setPen(QColor("#333"))
+        painter.setPen(text_col)
         painter.setFont(QFont("Arial", 7))
         for c in range(show_cols):
             x = int(rw + c * cell_w)

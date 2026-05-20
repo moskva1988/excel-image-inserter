@@ -9,6 +9,15 @@ from PyQt5.QtGui import QPixmap, QPainter, QPen, QColor, QFont, QBrush
 from app.core.image_processor import estimate_size
 from app.core.models import THUMB_SIZE
 
+try:
+    from qfluentwidgets import isDarkTheme, themeColor
+except Exception:  # pragma: no cover
+    def isDarkTheme():
+        return False
+
+    def themeColor():
+        return QColor("#6366f1")
+
 
 # ── Thumbnail stack widget ─────────────────────────────────────────────────────
 class ThumbCard(QWidget):
@@ -31,26 +40,40 @@ class ThumbCard(QWidget):
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        dark = isDarkTheme()
+        accent = themeColor()
         p.drawPixmap(0, 0, self.pixmap)
         if self.selected:
-            p.setPen(QPen(QColor("#6366f1"), 3))
+            p.setPen(QPen(accent, 3))
             p.setBrush(Qt.NoBrush)
             p.drawRect(1, 1, self.width() - 2, self.height() - 2)
         bar_h = 18
         bar_y = self.height() - bar_h
-        p.fillRect(0, bar_y, self.width(), bar_h, QColor(255, 255, 255, 200))
+        if dark:
+            bar_bg = QColor(20, 20, 20, 220)
+            orig_col = QColor("#e0e0e0")
+            est_col = QColor("#5fd87f")
+            btn_bg = QColor(60, 60, 60, 230)
+            btn_fg = QColor("#f0f0f0")
+        else:
+            bar_bg = QColor(255, 255, 255, 200)
+            orig_col = QColor("#333")
+            est_col = QColor("#16a34a")
+            btn_bg = QColor(255, 255, 255, 220)
+            btn_fg = QColor("#333")
+        p.fillRect(0, bar_y, self.width(), bar_h, bar_bg)
         p.setFont(QFont("Arial", 8))
-        p.setPen(QColor("#333"))
+        p.setPen(orig_col)
         p.drawText(4, bar_y, self.width() // 2, bar_h, Qt.AlignLeft | Qt.AlignVCenter, f"{self.orig_mb:.2f}MB")
-        p.setPen(QColor("#16a34a"))
+        p.setPen(est_col)
         p.drawText(self.width() // 2, bar_y, self.width() // 2 - 4, bar_h, Qt.AlignRight | Qt.AlignVCenter, f"{self.est_mb:.2f}MB")
         btn_r = 9
         cx = self.width() - btn_r - 4
         cy = btn_r + 4
-        p.setBrush(QColor(255, 255, 255, 220))
+        p.setBrush(btn_bg)
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPoint(cx, cy), btn_r, btn_r)
-        p.setPen(QColor("#333"))
+        p.setPen(btn_fg)
         p.setFont(QFont("Arial", 9, QFont.Bold))
         p.drawText(cx - btn_r, cy - btn_r, btn_r * 2, btn_r * 2, Qt.AlignCenter, "×")
         p.end()

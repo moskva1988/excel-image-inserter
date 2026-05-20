@@ -3,23 +3,47 @@ from pathlib import Path
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
-    QLineEdit, QFileDialog, QListWidget, QAbstractItemView,
-    QRadioButton, QButtonGroup, QMessageBox, QProgressBar, QCheckBox,
-    QFrame, QGridLayout, QSizePolicy, QScrollArea,
+    QFileDialog, QAbstractItemView,
+    QButtonGroup, QMessageBox,
+    QGridLayout, QSizePolicy,
     QTreeWidget, QTreeWidgetItem, QHeaderView,
     QInputDialog, QMenu,
 )
-from PyQt5.QtCore import Qt, QSize
+from PyQt5.QtCore import Qt, QSize, QSettings
 from PyQt5.QtGui import QPixmap, QIcon, QColor, QFont
 
 import openpyxl
+
+from qfluentwidgets import (
+    PushButton, PrimaryPushButton, TransparentToolButton,
+    LineEdit, ComboBox, EditableComboBox,
+    CheckBox, RadioButton, SpinBox, DoubleSpinBox, ProgressBar,
+    BodyLabel, StrongBodyLabel, TitleLabel, CaptionLabel,
+    CardWidget, FluentIcon, setTheme, Theme, isDarkTheme, themeColor,
+)
 
 from app.core.models import APP_VERSION, BUILD_NUMBER, CROP_PRESETS, GROUP_ICON, GROUP_ICON_COLLAPSED
 from app.core.image_processor import estimate_size
 from app.core.excel_writer import InsertWorker
 from app.ui.grid_preview import GridPreview
 from app.ui.image_list import ThumbStackView
+
+
+def _make_card(title: str = "") -> tuple:
+    """Create a CardWidget with optional bold title label.
+
+    Returns (card_widget, inner_layout). The inner layout is a QVBoxLayout
+    embedded in the card; if `title` is non-empty, a StrongBodyLabel header
+    is added first.
+    """
+    card = CardWidget()
+    outer = QVBoxLayout(card)
+    outer.setContentsMargins(10, 8, 10, 8)
+    outer.setSpacing(6)
+    if title:
+        header = StrongBodyLabel(title)
+        outer.addWidget(header)
+    return card, outer
 
 
 # ── Main window ────────────────────────────────────────────────────────────────
@@ -34,6 +58,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(750, 750)
         self.groups = [{"title": "Group 1", "images": []}]
         self._collapsed_groups = set()  # indices of collapsed groups
+        self._settings = QSettings("ExcelImageInserter", "ExcelImageInserter")
         self._build_ui()
 
     @property
@@ -47,34 +72,37 @@ class MainWindow(QMainWindow):
         root.setSpacing(6)
 
         # ── Excel file ─────────────────────────────────────────────────────
-        # Header row: title + about button on same line
+        # Header row: title + theme switcher + about button on same line
         file_header = QHBoxLayout()
-        file_header.addWidget(QLabel("<b>Excel File</b>"))
+        file_header.addWidget(TitleLabel("Excel File"))
         file_header.addStretch()
-        self.btn_about = QPushButton("?")
-        self.btn_about.setFixedSize(24, 24)
+        file_header.addWidget(CaptionLabel("Theme:"))
+        self.combo_theme = ComboBox()
+        self.combo_theme.addItems(["System", "Light", "Dark"])
+        self.combo_theme.setMinimumWidth(110)
+        saved_theme = self._settings.value("ui/theme", "System")
+        if saved_theme in ("System", "Light", "Dark"):
+            self.combo_theme.setCurrentText(saved_theme)
+        self.combo_theme.currentTextChanged.connect(self._on_theme_changed)
+        file_header.addWidget(self.combo_theme)
+        self.btn_about = TransparentToolButton(FluentIcon.HELP)
+        self.btn_about.setFixedSize(28, 28)
         self.btn_about.setToolTip("About")
-        self.btn_about.setStyleSheet(
-            "QPushButton { border: 1px solid palette(mid); border-radius: 12px; "
-            "font-weight: bold; font-size: 13px; }"
-            "QPushButton:hover { background: palette(midlight); }"
-        )
         self.btn_about.clicked.connect(self._show_about)
         file_header.addWidget(self.btn_about)
         root.addLayout(file_header)
 
-        grp_file = QGroupBox()
-        lay_file = QVBoxLayout(grp_file)
-        lay_file.setSpacing(4)
+        grp_file, lay_file = _make_card()
+        lay_file.setSpacing(6)
 
-        lbl_format = QLabel("⚠ Only .xlsx (Excel 2007+) is supported. Old .xls files must be re-saved as .xlsx first.")
+        lbl_format = BodyLabel("⚠ Only .xlsx (Excel 2007+) is supported. Old .xls files must be re-saved as .xlsx first.")
         lbl_format.setStyleSheet("color: #e67e22; font-size: 11px; padding: 2px 0;")
         lbl_format.setWordWrap(True)
         lay_file.addWidget(lbl_format)
 
         row1 = QHBoxLayout()
-        self.rb_new = QRadioButton("Create new")
-        self.rb_open = QRadioButton("Open existing")
+        self.rb_new = RadioButton("Create new")
+        self.rb_open = RadioButton("Open existing")
         self.rb_open.setChecked(True)
         bg = QButtonGroup(self)
         bg.addButton(self.rb_new)
@@ -84,21 +112,21 @@ class MainWindow(QMainWindow):
         lay_file.addLayout(row1)
 
         row2 = QHBoxLayout()
-        self.le_file = QLineEdit()
+        self.le_file = LineEdit()
         self.le_file.setPlaceholderText("Path to .xlsx file")
-        self.btn_browse_file = QPushButton("Browse...")
+        self.btn_browse_file = PushButton(FluentIcon.FOLDER, "Browse...")
         self.btn_browse_file.clicked.connect(self._browse_file)
         row2.addWidget(self.le_file, 1)
         row2.addWidget(self.btn_browse_file)
         lay_file.addLayout(row2)
 
         row3 = QHBoxLayout()
-        row3.addWidget(QLabel("Sheet:"))
-        self.combo_sheet = QComboBox()
+        row3.addWidget(BodyLabel("Sheet:"))
+        self.combo_sheet = ComboBox()
         self.combo_sheet.setMinimumWidth(120)
         row3.addWidget(self.combo_sheet, 1)
-        self.cb_new_sheet = QCheckBox("New:")
-        self.le_new_sheet = QLineEdit()
+        self.cb_new_sheet = CheckBox("New:")
+        self.le_new_sheet = LineEdit()
         self.le_new_sheet.setPlaceholderText("Sheet name")
         self.le_new_sheet.setEnabled(False)
         self.cb_new_sheet.toggled.connect(self.le_new_sheet.setEnabled)
@@ -110,8 +138,8 @@ class MainWindow(QMainWindow):
 
         # Insert after selector (for new sheets)
         row_insert = QHBoxLayout()
-        self.lbl_insert_after = QLabel("Insert after:")
-        self.combo_insert_after = QComboBox()
+        self.lbl_insert_after = BodyLabel("Insert after:")
+        self.combo_insert_after = ComboBox()
         self.combo_insert_after.addItem("(at the end)")
         row_insert.addWidget(self.lbl_insert_after)
         row_insert.addWidget(self.combo_insert_after, 1)
@@ -120,7 +148,7 @@ class MainWindow(QMainWindow):
         lay_file.addLayout(row_insert)
 
         # TOC checkbox
-        self.cb_toc = QCheckBox("Create / update Contents sheet with links")
+        self.cb_toc = CheckBox("Create / update Contents sheet with links")
         self.cb_toc.setChecked(True)
         self.cb_toc.hide()
         lay_file.addWidget(self.cb_toc)
@@ -129,12 +157,11 @@ class MainWindow(QMainWindow):
         root.addWidget(grp_file)
 
         # ── Images ─────────────────────────────────────────────────────────
-        grp_img = QGroupBox("Images")
-        lay_img = QVBoxLayout(grp_img)
+        grp_img, lay_img = _make_card("Images")
 
         # Mode toggle
         mode_row = QHBoxLayout()
-        self.cb_use_groups = QCheckBox("Use groups (headers + TOC)")
+        self.cb_use_groups = CheckBox("Use groups (headers + TOC)")
         self.cb_use_groups.toggled.connect(self._on_group_mode_toggled)
         mode_row.addWidget(self.cb_use_groups)
         mode_row.addStretch()
@@ -142,21 +169,21 @@ class MainWindow(QMainWindow):
 
         # Image/group controls
         btn_row = QHBoxLayout()
-        self.btn_add_img = QPushButton("Add images...")
+        self.btn_add_img = PushButton(FluentIcon.PHOTO, "Add images...")
         self.btn_add_img.clicked.connect(self._add_images)
-        self.btn_add_group = QPushButton("+ Group")
+        self.btn_add_group = PushButton(FluentIcon.ADD, "Group")
         self.btn_add_group.clicked.connect(self._add_group)
         self.btn_add_group.hide()
-        self.btn_remove = QPushButton("Remove")
+        self.btn_remove = PushButton(FluentIcon.DELETE, "Remove")
         self.btn_remove.clicked.connect(self._remove_selected)
-        self.btn_clear_img = QPushButton("Clear all")
+        self.btn_clear_img = PushButton(FluentIcon.BROOM, "Clear all")
         self.btn_clear_img.clicked.connect(self._clear_images)
-        self.btn_move_up = QPushButton("▲")
-        self.btn_move_up.setMaximumWidth(28)
+        self.btn_move_up = PushButton("▲")
+        self.btn_move_up.setMaximumWidth(34)
         self.btn_move_up.setToolTip("Move up")
         self.btn_move_up.clicked.connect(lambda: self._move_selected(-1))
-        self.btn_move_down = QPushButton("▼")
-        self.btn_move_down.setMaximumWidth(28)
+        self.btn_move_down = PushButton("▼")
+        self.btn_move_down.setMaximumWidth(34)
         self.btn_move_down.setToolTip("Move down")
         self.btn_move_down.clicked.connect(lambda: self._move_selected(1))
         btn_row.addWidget(self.btn_add_img)
@@ -167,14 +194,23 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_move_down)
         btn_row.addStretch()
 
-        # View switcher
-        self.btn_view_list = QPushButton("List")
-        self.btn_view_detail = QPushButton("Details")
-        self.btn_view_stack = QPushButton("Stack")
+        # View switcher — keep plain QPushButton: PrimaryPushButton would conflict
+        # with the main "Insert Images" action; PushButton lacks `setCheckable`
+        # styling in Fluent. Plain Qt push buttons with checkable=True give us a
+        # consistent toggle behaviour across themes.
+        from PyQt5.QtWidgets import QPushButton as _ToggleButton
+        self.btn_view_list = _ToggleButton("List")
+        self.btn_view_detail = _ToggleButton("Details")
+        self.btn_view_stack = _ToggleButton("Stack")
         for b in [self.btn_view_list, self.btn_view_detail, self.btn_view_stack]:
             b.setCheckable(True)
-            b.setMaximumWidth(65)
-            b.setStyleSheet("QPushButton:checked{background:#6366f1;color:#fff;border-radius:4px;padding:3px 6px}")
+            b.setMaximumWidth(70)
+            b.setStyleSheet(
+                "QPushButton{padding:4px 8px;border:1px solid palette(mid);"
+                "border-radius:4px;background:transparent;}"
+                "QPushButton:hover{background:palette(midlight);}"
+                "QPushButton:checked{background:#6366f1;color:#fff;border-color:#6366f1;}"
+            )
         self.btn_view_list.setChecked(True)
         self.btn_view_list.clicked.connect(lambda: self._switch_view("list"))
         self.btn_view_detail.clicked.connect(lambda: self._switch_view("detail"))
@@ -186,9 +222,9 @@ class MainWindow(QMainWindow):
 
         # Active group selector
         group_sel_row = QHBoxLayout()
-        self.lbl_active_group = QLabel("Add to group:")
+        self.lbl_active_group = BodyLabel("Add to group:")
         self.lbl_active_group.hide()
-        self.combo_active_group = QComboBox()
+        self.combo_active_group = ComboBox()
         self.combo_active_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.combo_active_group.hide()
         group_sel_row.addWidget(self.lbl_active_group)
@@ -249,9 +285,8 @@ class MainWindow(QMainWindow):
         # Image stats bar (outside the Images group box)
         stats_row = QHBoxLayout()
         stats_row.setContentsMargins(4, 0, 4, 0)
-        self.lbl_img_count = QLabel("0 images")
-        self.lbl_total_size = QLabel("")
-        self.lbl_total_size.setStyleSheet("color:#999")
+        self.lbl_img_count = BodyLabel("0 images")
+        self.lbl_total_size = CaptionLabel("")
         stats_row.addWidget(self.lbl_img_count)
         stats_row.addStretch()
         stats_row.addWidget(self.lbl_total_size)
@@ -260,63 +295,66 @@ class MainWindow(QMainWindow):
         # ── Settings: Resize + Display in one row ──────────────────────────
         settings_row = QHBoxLayout()
 
-        grp_resize = QGroupBox("Resize (px)")
-        g_r = QGridLayout(grp_resize)
+        grp_resize, lay_resize = _make_card("Resize (px)")
+        grp_resize_inner = QWidget()
+        g_r = QGridLayout(grp_resize_inner)
+        g_r.setContentsMargins(0, 0, 0, 0)
         g_r.setSpacing(4)
         resize_presets = ["Auto", "64", "128", "256", "320", "480", "640", "800", "1024", "1200", "1600", "1920", "2048", "3840"]
-        g_r.addWidget(QLabel("W:"), 0, 0)
-        self.combo_px_w = QComboBox()
-        self.combo_px_w.setEditable(True)
+        g_r.addWidget(BodyLabel("W:"), 0, 0)
+        self.combo_px_w = EditableComboBox()
         self.combo_px_w.addItems(resize_presets)
         self.combo_px_w.setCurrentText("1200")
         self.combo_px_w.currentTextChanged.connect(self._on_resize_changed)
         g_r.addWidget(self.combo_px_w, 0, 1)
-        g_r.addWidget(QLabel("H:"), 1, 0)
-        self.combo_px_h = QComboBox()
-        self.combo_px_h.setEditable(True)
+        g_r.addWidget(BodyLabel("H:"), 1, 0)
+        self.combo_px_h = EditableComboBox()
         self.combo_px_h.addItems(resize_presets)
         self.combo_px_h.setCurrentText("Auto")
         self.combo_px_h.currentTextChanged.connect(self._on_resize_changed)
         g_r.addWidget(self.combo_px_h, 1, 1)
+        lay_resize.addWidget(grp_resize_inner)
         settings_row.addWidget(grp_resize)
 
-        grp_display = QGroupBox("Display (cm)")
-        g_d = QGridLayout(grp_display)
+        grp_display, lay_display = _make_card("Display (cm)")
+        grp_display_inner = QWidget()
+        g_d = QGridLayout(grp_display_inner)
+        g_d.setContentsMargins(0, 0, 0, 0)
         g_d.setSpacing(4)
-        g_d.addWidget(QLabel("Mode:"), 0, 0)
-        self.combo_display_mode = QComboBox()
+        g_d.addWidget(BodyLabel("Mode:"), 0, 0)
+        self.combo_display_mode = ComboBox()
         self.combo_display_mode.addItems(["Per image", "Fixed ratio", "Manual"])
         self.combo_display_mode.setCurrentIndex(2)
         self.combo_display_mode.currentIndexChanged.connect(self._on_display_mode_changed)
         g_d.addWidget(self.combo_display_mode, 0, 1)
-        g_d.addWidget(QLabel("W:"), 1, 0)
-        self.spin_cm_w = QDoubleSpinBox()
+        g_d.addWidget(BodyLabel("W:"), 1, 0)
+        self.spin_cm_w = DoubleSpinBox()
         self.spin_cm_w.setRange(0.5, 50)
         self.spin_cm_w.setValue(6.0)
         self.spin_cm_w.setSingleStep(0.5)
         self.spin_cm_w.setSuffix(" cm")
         self.spin_cm_w.valueChanged.connect(self._on_cm_w_changed)
         g_d.addWidget(self.spin_cm_w, 1, 1)
-        g_d.addWidget(QLabel("H:"), 2, 0)
-        self.spin_cm_h = QDoubleSpinBox()
+        g_d.addWidget(BodyLabel("H:"), 2, 0)
+        self.spin_cm_h = DoubleSpinBox()
         self.spin_cm_h.setRange(0.5, 50)
         self.spin_cm_h.setValue(4.5)
         self.spin_cm_h.setSingleStep(0.5)
         self.spin_cm_h.setSuffix(" cm")
         self.spin_cm_h.valueChanged.connect(self._on_cm_h_changed)
         g_d.addWidget(self.spin_cm_h, 2, 1)
+        lay_display.addWidget(grp_display_inner)
         self._display_aspect = 6.0 / 4.5
         self._cm_updating = False
         settings_row.addWidget(grp_display)
 
-        grp_crop = QGroupBox("Crop")
-        g_c = QVBoxLayout(grp_crop)
-        self.combo_crop = QComboBox()
+        grp_crop, lay_crop = _make_card("Crop")
+        self.combo_crop = ComboBox()
         self.combo_crop.addItems(CROP_PRESETS.keys())
         self.combo_crop.currentTextChanged.connect(self._on_settings_changed)
         self.combo_crop.currentTextChanged.connect(self._on_resize_changed)
-        g_c.addWidget(self.combo_crop)
-        g_c.addStretch()
+        lay_crop.addWidget(self.combo_crop)
+        lay_crop.addStretch()
         settings_row.addWidget(grp_crop)
 
         root.addLayout(settings_row)
@@ -324,53 +362,60 @@ class MainWindow(QMainWindow):
         # ── Grid + Position + Preview ──────────────────────────────────────
         grid_row = QHBoxLayout()
 
-        grp_grid = QGroupBox("Grid")
-        g_g = QGridLayout(grp_grid)
+        grp_grid, lay_grid = _make_card("Grid")
+        grp_grid_inner = QWidget()
+        g_g = QGridLayout(grp_grid_inner)
+        g_g.setContentsMargins(0, 0, 0, 0)
         g_g.setSpacing(4)
-        g_g.addWidget(QLabel("Cols:"), 0, 0)
-        self.spin_cols = QSpinBox()
+        g_g.addWidget(BodyLabel("Cols:"), 0, 0)
+        self.spin_cols = SpinBox()
         self.spin_cols.setRange(1, 20)
         self.spin_cols.setValue(2)
         self.spin_cols.valueChanged.connect(self._on_settings_changed)
         g_g.addWidget(self.spin_cols, 0, 1)
-        g_g.addWidget(QLabel("H gap:"), 1, 0)
-        self.spin_gap_h = QDoubleSpinBox()
+        g_g.addWidget(BodyLabel("H gap:"), 1, 0)
+        self.spin_gap_h = DoubleSpinBox()
         self.spin_gap_h.setRange(0, 50)
         self.spin_gap_h.setValue(0.5)
         self.spin_gap_h.setSingleStep(0.05)
         self.spin_gap_h.setSuffix(" cm")
         self.spin_gap_h.setDecimals(2)
         g_g.addWidget(self.spin_gap_h, 1, 1)
-        g_g.addWidget(QLabel("V gap:"), 2, 0)
-        self.spin_gap_v = QDoubleSpinBox()
+        g_g.addWidget(BodyLabel("V gap:"), 2, 0)
+        self.spin_gap_v = DoubleSpinBox()
         self.spin_gap_v.setRange(0, 50)
         self.spin_gap_v.setValue(0.5)
         self.spin_gap_v.setSingleStep(0.05)
         self.spin_gap_v.setSuffix(" cm")
         self.spin_gap_v.setDecimals(2)
         g_g.addWidget(self.spin_gap_v, 2, 1)
+        lay_grid.addWidget(grp_grid_inner)
         grid_row.addWidget(grp_grid)
 
-        grp_pos = QGroupBox("Position")
-        g_p = QGridLayout(grp_pos)
+        grp_pos, lay_pos = _make_card("Position")
+        grp_pos_inner = QWidget()
+        g_p = QGridLayout(grp_pos_inner)
+        g_p.setContentsMargins(0, 0, 0, 0)
         g_p.setSpacing(4)
-        g_p.addWidget(QLabel("Cell:"), 0, 0)
+        g_p.addWidget(BodyLabel("Cell:"), 0, 0)
         pos_row = QHBoxLayout()
-        self.le_start_col = QLineEdit("A")
-        self.le_start_col.setMaximumWidth(35)
-        self.spin_start_row = QSpinBox()
+        self.le_start_col = LineEdit()
+        self.le_start_col.setText("A")
+        self.le_start_col.setMaximumWidth(45)
+        self.spin_start_row = SpinBox()
         self.spin_start_row.setRange(1, 1048576)
         self.spin_start_row.setValue(1)
         pos_row.addWidget(self.le_start_col)
         pos_row.addWidget(self.spin_start_row)
         g_p.addLayout(pos_row, 0, 1)
-        g_p.addWidget(QLabel("Mode:"), 1, 0)
-        self.combo_placement = QComboBox()
+        g_p.addWidget(BodyLabel("Mode:"), 1, 0)
+        self.combo_placement = ComboBox()
         self.combo_placement.addItems(["Over cells", "In cell"])
         self.combo_placement.currentIndexChanged.connect(self._on_settings_changed)
         self.le_start_col.textChanged.connect(self._on_settings_changed)
         self.spin_start_row.valueChanged.connect(self._on_settings_changed)
         g_p.addWidget(self.combo_placement, 1, 1)
+        lay_pos.addWidget(grp_pos_inner)
         grid_row.addWidget(grp_pos)
 
         self.grid_preview = GridPreview()
@@ -379,17 +424,16 @@ class MainWindow(QMainWindow):
         root.addLayout(grid_row)
 
         # ── Action ─────────────────────────────────────────────────────────
-        self.progress = QProgressBar()
+        self.progress = ProgressBar()
         self.progress.setValue(0)
-        self.progress.setMaximumHeight(16)
+        self.progress.setMaximumHeight(8)
         root.addWidget(self.progress)
 
         action_row = QHBoxLayout()
-        self.lbl_status = QLabel("Ready")
+        self.lbl_status = BodyLabel("Ready")
         action_row.addWidget(self.lbl_status, 1)
-        self.btn_insert = QPushButton("  Insert Images  ")
+        self.btn_insert = PrimaryPushButton(FluentIcon.ACCEPT, "Insert Images")
         self.btn_insert.setMinimumHeight(36)
-        self.btn_insert.setStyleSheet("font-size:13px;font-weight:bold;background:#6366f1;color:#fff;border-radius:6px;padding:6px 20px")
         self.btn_insert.clicked.connect(self._do_insert)
         action_row.addWidget(self.btn_insert)
         root.addLayout(action_row)
@@ -872,6 +916,18 @@ class MainWindow(QMainWindow):
     def _on_resize_changed(self, *_):
         if self.image_paths:
             self._rebuild_tree()
+
+    def _on_theme_changed(self, value):
+        """Apply and persist a Light/Dark/System theme choice."""
+        mapping = {"Light": Theme.LIGHT, "Dark": Theme.DARK, "System": Theme.AUTO}
+        setTheme(mapping.get(value, Theme.AUTO))
+        self._settings.setValue("ui/theme", value)
+        # Repaint custom widgets that depend on theme
+        self.grid_preview.update()
+        if hasattr(self, "thumb_stack"):
+            for card in self.thumb_stack.cards:
+                card.update()
+        self._rebuild_tree()
 
     def _show_about(self):
         QMessageBox.about(
