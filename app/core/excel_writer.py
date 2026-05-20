@@ -130,15 +130,24 @@ class InsertWorker(QThread):
                 xl_img = XLImage(buf)
                 w_cm = p["display_w_cm"]
                 h_cm = p["display_h_cm"]
-                display_mode = p.get("display_mode", 2)
-                if display_mode == 0:
+                display_mode = p.get("display_mode", 1)
+                anchor_axis = p.get("anchor_axis", "W")
+                fixed_aspect = p.get("fixed_aspect", (4, 3))
+                if display_mode == 0:  # Per image — derive from image's own aspect
                     iw, ih = img.size
                     if iw > 0 and ih > 0:
-                        aspect = iw / ih
-                        if aspect >= 1:
-                            h_cm = w_cm / aspect
+                        if anchor_axis == "W":
+                            h_cm = w_cm * (ih / iw)
+                        else:  # H
+                            w_cm = h_cm * (iw / ih)
+                elif display_mode == 1:  # Fixed ratio — derive from fixed_aspect
+                    aw, ah = fixed_aspect
+                    if aw > 0 and ah > 0:
+                        if anchor_axis == "W":
+                            h_cm = w_cm * (ah / aw)
                         else:
-                            w_cm = h_cm * aspect
+                            w_cm = h_cm * (aw / ah)
+                # else: Manual — use w_cm and h_cm as given
                 xl_img.width = w_cm * CM_TO_PX_96
                 xl_img.height = h_cm * CM_TO_PX_96
 
@@ -156,34 +165,23 @@ class InsertWorker(QThread):
                 else:
                     gap_h_px = p.get("gap_h_cm", 0.5) * CM_TO_PX_96
                     gap_v_px = p.get("gap_v_cm", 0.5) * CM_TO_PX_96
+                    # Pure EMU offsets from the grid's top-left anchor cell.
+                    # The X/Y position of this image relative to the start cell
+                    # is the SUM of all preceding image widths and gaps; we
+                    # encode it entirely in colOff/rowOff so the actual cell
+                    # widths/heights of the sheet never enter the calculation
+                    # (which is what caused the horizontal-collapse /
+                    # vertical-stretch artefacts on default-sized sheets).
                     x_px = col_offset * (img_w_px + gap_h_px)
                     y_px = row_offset * (img_h_px + gap_v_px)
                     emu_w = pixels_to_EMU(img_w_px)
                     emu_h = pixels_to_EMU(img_h_px)
 
-                    col_i = start_col_idx
-                    remaining_x = x_px
-                    while remaining_x > 0:
-                        cw = self._col_width_px(ws, col_i)
-                        if remaining_x < cw:
-                            break
-                        remaining_x -= cw
-                        col_i += 1
-
-                    row_i = current_row
-                    remaining_y = y_px
-                    while remaining_y > 0:
-                        rh = self._row_height_px(ws, row_i)
-                        if remaining_y < rh:
-                            break
-                        remaining_y -= rh
-                        row_i += 1
-
                     marker = AnchorMarker(
-                        col=col_i - 1,
-                        colOff=pixels_to_EMU(remaining_x),
-                        row=row_i - 1,
-                        rowOff=pixels_to_EMU(remaining_y),
+                        col=start_col_idx - 1,
+                        colOff=pixels_to_EMU(x_px),
+                        row=current_row - 1,
+                        rowOff=pixels_to_EMU(y_px),
                     )
                     anchor = OneCellAnchor(
                         _from=marker,

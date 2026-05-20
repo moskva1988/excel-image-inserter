@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
         g_d.addWidget(BodyLabel("Mode:"), 0, 0)
         self.combo_display_mode = ComboBox()
         self.combo_display_mode.addItems(["Per image", "Fixed ratio", "Manual"])
-        self.combo_display_mode.setCurrentIndex(2)
+        self.combo_display_mode.setCurrentIndex(1)
         self.combo_display_mode.currentIndexChanged.connect(self._on_display_mode_changed)
         g_d.addWidget(self.combo_display_mode, 0, 1)
         g_d.addWidget(BodyLabel("W:"), 1, 0)
@@ -376,6 +376,56 @@ class MainWindow(QMainWindow):
         self.spin_cm_h.setSuffix(" cm")
         self.spin_cm_h.valueChanged.connect(self._on_cm_h_changed)
         g_d.addWidget(self.spin_cm_h, 2, 1)
+
+        # ── Anchor axis (W/H) toggle — visible in Per image / Fixed ratio ──
+        self.lbl_anchor_axis = BodyLabel("Anchor:")
+        g_d.addWidget(self.lbl_anchor_axis, 3, 0)
+        anchor_row = QHBoxLayout()
+        anchor_row.setContentsMargins(0, 0, 0, 0)
+        anchor_row.setSpacing(6)
+        self.rb_anchor_w = RadioButton("W")
+        self.rb_anchor_h = RadioButton("H")
+        self.rb_anchor_w.setChecked(True)
+        self._anchor_axis_group = QButtonGroup(self)
+        self._anchor_axis_group.addButton(self.rb_anchor_w)
+        self._anchor_axis_group.addButton(self.rb_anchor_h)
+        self.rb_anchor_w.toggled.connect(self._on_anchor_axis_changed)
+        anchor_row.addWidget(self.rb_anchor_w)
+        anchor_row.addWidget(self.rb_anchor_h)
+        anchor_row.addStretch()
+        g_d.addLayout(anchor_row, 3, 1)
+
+        # ── Fixed-ratio aspect dropdown — visible only in Fixed ratio ──
+        self.lbl_fixed_aspect = BodyLabel("Ratio:")
+        g_d.addWidget(self.lbl_fixed_aspect, 4, 0)
+        aspect_row = QHBoxLayout()
+        aspect_row.setContentsMargins(0, 0, 0, 0)
+        aspect_row.setSpacing(4)
+        self.combo_fixed_aspect = ComboBox()
+        self.combo_fixed_aspect.addItems(
+            ["1:1", "4:3", "3:2", "16:9", "3:4", "2:3", "9:16", "Custom..."]
+        )
+        self.combo_fixed_aspect.setCurrentText("4:3")
+        self.combo_fixed_aspect.currentTextChanged.connect(self._on_aspect_changed)
+        self.spin_aspect_w = SpinBox()
+        self.spin_aspect_w.setRange(1, 100)
+        self.spin_aspect_w.setValue(4)
+        self.spin_aspect_w.setMaximumWidth(60)
+        self.spin_aspect_w.valueChanged.connect(self._on_aspect_changed)
+        self.spin_aspect_h = SpinBox()
+        self.spin_aspect_h.setRange(1, 100)
+        self.spin_aspect_h.setValue(3)
+        self.spin_aspect_h.setMaximumWidth(60)
+        self.spin_aspect_h.valueChanged.connect(self._on_aspect_changed)
+        aspect_row.addWidget(self.combo_fixed_aspect, 1)
+        aspect_row.addWidget(self.spin_aspect_w)
+        aspect_row.addWidget(BodyLabel(":"))
+        aspect_row.addWidget(self.spin_aspect_h)
+        # Custom spinboxes hidden until "Custom..." is selected
+        self.spin_aspect_w.hide()
+        self.spin_aspect_h.hide()
+        g_d.addLayout(aspect_row, 4, 1)
+
         lay_display.addWidget(grp_display_inner)
         self._display_aspect = 6.0 / 4.5
         self._cm_updating = False
@@ -472,6 +522,11 @@ class MainWindow(QMainWindow):
         root.addLayout(action_row)
 
         # (About is shown via ? button in top header)
+
+        # Apply initial visibility/enable state for the (new) default display
+        # mode. setCurrentIndex above was called BEFORE the widgets it
+        # toggles existed, so the signal-driven path can't be relied on here.
+        self._on_display_mode_changed(self.combo_display_mode.currentIndex())
 
         self._rebuild_tree()
 
@@ -987,21 +1042,105 @@ class MainWindow(QMainWindow):
         )
 
     def _on_display_mode_changed(self, index):
+        # Per image (0): show W/H toggle, hide aspect dropdown
+        # Fixed ratio (1): show W/H toggle AND aspect dropdown
+        # Manual (2): hide both, both spinboxes enabled
         if index == 0:
-            self.spin_cm_w.setEnabled(True)
-            self.spin_cm_h.setEnabled(False)
+            self.lbl_anchor_axis.show()
+            self.rb_anchor_w.show()
+            self.rb_anchor_h.show()
+            self.lbl_fixed_aspect.hide()
+            self.combo_fixed_aspect.hide()
+            self.spin_aspect_w.hide()
+            self.spin_aspect_h.hide()
+            self._apply_anchor_axis_enable()
         elif index == 1:
-            self.spin_cm_w.setEnabled(True)
-            self.spin_cm_h.setEnabled(False)
-            self._display_aspect = self.spin_cm_w.value() / max(self.spin_cm_h.value(), 0.1)
+            self.lbl_anchor_axis.show()
+            self.rb_anchor_w.show()
+            self.rb_anchor_h.show()
+            self.lbl_fixed_aspect.show()
+            self.combo_fixed_aspect.show()
+            is_custom = self.combo_fixed_aspect.currentText() == "Custom..."
+            self.spin_aspect_w.setVisible(is_custom)
+            self.spin_aspect_h.setVisible(is_custom)
+            # Keep _display_aspect in sync with the active fixed ratio
+            aw, ah = self._current_fixed_aspect()
+            if aw and ah:
+                self._display_aspect = aw / ah
+            self._apply_anchor_axis_enable()
+            # Recompute the dependent spinbox from the current anchor
+            self._sync_fixed_spinbox()
         else:
+            self.lbl_anchor_axis.hide()
+            self.rb_anchor_w.hide()
+            self.rb_anchor_h.hide()
+            self.lbl_fixed_aspect.hide()
+            self.combo_fixed_aspect.hide()
+            self.spin_aspect_w.hide()
+            self.spin_aspect_h.hide()
             self.spin_cm_w.setEnabled(True)
             self.spin_cm_h.setEnabled(True)
+
+    def _current_fixed_aspect(self):
+        """Return (w, h) tuple for the active aspect dropdown selection."""
+        text = self.combo_fixed_aspect.currentText()
+        if text == "Custom...":
+            return self.spin_aspect_w.value(), self.spin_aspect_h.value()
+        try:
+            w, h = text.split(":")
+            return int(w), int(h)
+        except (ValueError, AttributeError):
+            return 4, 3
+
+    def _apply_anchor_axis_enable(self):
+        """Enable/disable W and H spinboxes based on selected anchor axis.
+        Only applies in Per image / Fixed ratio modes (caller responsible)."""
+        if self.rb_anchor_w.isChecked():
+            self.spin_cm_w.setEnabled(True)
+            self.spin_cm_h.setEnabled(False)
+        else:
+            self.spin_cm_w.setEnabled(False)
+            self.spin_cm_h.setEnabled(True)
+
+    def _on_anchor_axis_changed(self, _checked=False):
+        mode = self.combo_display_mode.currentIndex()
+        if mode == 2:
+            return
+        self._apply_anchor_axis_enable()
+        if mode == 1:
+            self._sync_fixed_spinbox()
+
+    def _on_aspect_changed(self, *_):
+        # Toggle custom spinboxes visibility based on dropdown
+        is_custom = self.combo_fixed_aspect.currentText() == "Custom..."
+        if self.combo_display_mode.currentIndex() == 1:
+            self.spin_aspect_w.setVisible(is_custom)
+            self.spin_aspect_h.setVisible(is_custom)
+        aw, ah = self._current_fixed_aspect()
+        if aw and ah:
+            self._display_aspect = aw / ah
+        if self.combo_display_mode.currentIndex() == 1:
+            self._sync_fixed_spinbox()
+
+    def _sync_fixed_spinbox(self):
+        """In Fixed-ratio mode, drive the disabled spinbox from the active
+        one through the current aspect ratio."""
+        if self._cm_updating:
+            return
+        aspect = max(self._display_aspect, 0.01)
+        self._cm_updating = True
+        try:
+            if self.rb_anchor_w.isChecked():
+                self.spin_cm_h.setValue(self.spin_cm_w.value() / aspect)
+            else:
+                self.spin_cm_w.setValue(self.spin_cm_h.value() * aspect)
+        finally:
+            self._cm_updating = False
 
     def _on_cm_w_changed(self, val):
         if self._cm_updating:
             return
-        if self.combo_display_mode.currentIndex() == 1:
+        if self.combo_display_mode.currentIndex() == 1 and self.rb_anchor_w.isChecked():
             self._cm_updating = True
             self.spin_cm_h.setValue(val / max(self._display_aspect, 0.01))
             self._cm_updating = False
@@ -1009,7 +1148,7 @@ class MainWindow(QMainWindow):
     def _on_cm_h_changed(self, val):
         if self._cm_updating:
             return
-        if self.combo_display_mode.currentIndex() == 1:
+        if self.combo_display_mode.currentIndex() == 1 and self.rb_anchor_h.isChecked():
             self._cm_updating = True
             self.spin_cm_w.setValue(val * self._display_aspect)
             self._cm_updating = False
@@ -1065,6 +1204,8 @@ class MainWindow(QMainWindow):
             "display_w_cm": self.spin_cm_w.value(),
             "display_h_cm": self.spin_cm_h.value(),
             "display_mode": self.combo_display_mode.currentIndex(),
+            "anchor_axis": "W" if self.rb_anchor_w.isChecked() else "H",
+            "fixed_aspect": self._current_fixed_aspect(),
             "crop_ratio": crop,
             "grid_cols": self.spin_cols.value(),
             "start_col": start_col,
