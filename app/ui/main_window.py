@@ -128,10 +128,10 @@ class MainWindow(QMainWindow):
         grp_file, lay_file = _make_card()
         lay_file.setSpacing(6)
 
-        lbl_format = BodyLabel("⚠ Only .xlsx (Excel 2007+) is supported. Old .xls files must be re-saved as .xlsx first.")
-        lbl_format.setStyleSheet("color: #e67e22; font-size: 11px; padding: 2px 0;")
-        lbl_format.setWordWrap(True)
-        lay_file.addWidget(lbl_format)
+        self.lbl_format = CaptionLabel("⚠ Only .xlsx (Excel 2007+) is supported. Old .xls files must be re-saved as .xlsx first.")
+        self._apply_format_warning_style()
+        self.lbl_format.setWordWrap(True)
+        lay_file.addWidget(self.lbl_format)
 
         row1 = QHBoxLayout()
         self.rb_new = RadioButton("Create new")
@@ -238,12 +238,7 @@ class MainWindow(QMainWindow):
         for b in [self.btn_view_list, self.btn_view_detail, self.btn_view_stack]:
             b.setCheckable(True)
             b.setMaximumWidth(70)
-            b.setStyleSheet(
-                "QPushButton{padding:4px 8px;border:1px solid palette(mid);"
-                "border-radius:4px;background:transparent;}"
-                "QPushButton:hover{background:palette(midlight);}"
-                "QPushButton:checked{background:#6366f1;color:#fff;border-color:#6366f1;}"
-            )
+        self._apply_view_toggle_styles()
         self.btn_view_list.setChecked(True)
         self.btn_view_list.clicked.connect(lambda: self._switch_view("list"))
         self.btn_view_detail.clicked.connect(lambda: self._switch_view("detail"))
@@ -1005,17 +1000,84 @@ class MainWindow(QMainWindow):
         if self.image_paths:
             self._rebuild_tree()
 
+    def _apply_view_toggle_styles(self):
+        """Apply theme-aware stylesheet to the List/Details/Stack toggle buttons.
+        Recomputes the accent color so a Light↔Dark switch picks up the new tint."""
+        try:
+            accent = themeColor().name()
+        except Exception:
+            accent = "#6366f1"
+        qss = (
+            "QPushButton {"
+            "  padding: 4px 8px;"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: 4px;"
+            "  background: transparent;"
+            "  color: palette(text);"
+            "}"
+            "QPushButton:hover {"
+            "  background: palette(midlight);"
+            "}"
+            f"QPushButton:checked {{"
+            f"  background: {accent};"
+            f"  color: white;"
+            f"  border-color: {accent};"
+            f"}}"
+        )
+        for b in (
+            getattr(self, "btn_view_list", None),
+            getattr(self, "btn_view_detail", None),
+            getattr(self, "btn_view_stack", None),
+        ):
+            if b is not None:
+                b.setStyleSheet(qss)
+
+    def _apply_format_warning_style(self):
+        """Theme-aware amber warning for the .xlsx-only notice."""
+        if not hasattr(self, "lbl_format"):
+            return
+        # Amber works on both themes; brighten slightly on dark.
+        color = "#f39c12" if isDarkTheme() else "#e67e22"
+        self.lbl_format.setStyleSheet(f"color: {color}; padding: 2px 0;")
+
+    def _refresh_themed_widgets(self):
+        """Re-run all per-widget stylesheets that depend on the active theme.
+        Called from _on_theme_changed so accent and warning colors flip."""
+        self._apply_view_toggle_styles()
+        self._apply_format_warning_style()
+
     def _on_theme_changed(self, value):
         """Apply and persist a Light/Dark/System theme choice."""
         mapping = {"Light": Theme.LIGHT, "Dark": Theme.DARK, "System": Theme.AUTO}
         setTheme(mapping.get(value, Theme.AUTO))
         self._settings.setValue("ui/theme", value)
+
+        # Force Fluent to flush the application stylesheet to all open windows.
+        # Re-applying the existing stylesheet triggers a global polish/repolish.
+        try:
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None:
+                app.setStyleSheet(app.styleSheet())
+        except Exception:
+            pass
+
+        # Re-apply per-widget custom stylesheets so they pick up the new theme
+        self._refresh_themed_widgets()
+        if hasattr(self, "batch_tab"):
+            try:
+                self.batch_tab.refresh_theme()
+            except Exception:
+                pass
+
         # Repaint custom widgets that depend on theme
         self.grid_preview.update()
         if hasattr(self, "thumb_stack"):
             for card in self.thumb_stack.cards:
                 card.update()
         self._rebuild_tree()
+        self.update()
+        self.repaint()
 
     def _show_about(self):
         QMessageBox.about(

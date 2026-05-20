@@ -194,15 +194,18 @@ class BatchProcessorWorker(QThread):
         # ── Save ──
         save_kwargs = {}
         save_mode_img = img
+        if orig_format == "PNG":
+            save_kwargs["optimize"] = True
+
+        # Normalize for JPEG: JPEG only supports RGB, no alpha / palette / CMYK / grayscale
         if orig_format in ("JPEG", "JPG"):
-            # JPEG doesn't support alpha
             if save_mode_img.mode == "RGBA":
                 bg = PILImage.new("RGB", save_mode_img.size, (255, 255, 255))
                 bg.paste(save_mode_img, mask=save_mode_img.split()[-1])
                 save_mode_img = bg
-            save_kwargs["quality"] = 92
-        elif orig_format == "PNG":
-            save_kwargs["optimize"] = True
+            elif save_mode_img.mode != "RGB":
+                save_mode_img = save_mode_img.convert("RGB")
+            save_kwargs.setdefault("quality", 92)
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         save_mode_img.save(dst, format=orig_format, **save_kwargs)

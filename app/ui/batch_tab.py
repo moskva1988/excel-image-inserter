@@ -10,19 +10,19 @@ from __future__ import annotations
 from datetime import datetime, time as dtime
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QDate, QTime
+from PyQt5.QtCore import Qt, QDate, QTime, QDateTime
 from PyQt5.QtGui import QColor, QPixmap, QIcon
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QButtonGroup, QFileDialog, QMessageBox, QStackedWidget, QColorDialog,
-    QSizePolicy,
+    QSizePolicy, QDateTimeEdit,
 )
 
 from qfluentwidgets import (
     PushButton, PrimaryPushButton,
     LineEdit, ComboBox, CheckBox, RadioButton, SpinBox, Slider, ProgressBar,
     BodyLabel, StrongBodyLabel, CaptionLabel,
-    CardWidget, FluentIcon, DatePicker, TimePicker,
+    CardWidget, FluentIcon, isDarkTheme,
 )
 
 from app.core.models import CROP_PRESETS
@@ -63,7 +63,6 @@ class BatchProcessorTab(QWidget):
 
         self._build_io_card(root)
         self._build_resize_card(root)
-        self._build_crop_card(root)
         self._build_metadata_card(root)
         self._build_watermark_card(root)
         self._build_action_row(root)
@@ -110,7 +109,7 @@ class BatchProcessorTab(QWidget):
         self.lbl_overwrite_warn = CaptionLabel(
             "⚠ This permanently modifies the source files. There is no undo."
         )
-        self.lbl_overwrite_warn.setStyleSheet("color: #e74c3c;")
+        self._apply_overwrite_warn_style()
         self.lbl_overwrite_warn.hide()
         lay.addWidget(self.lbl_overwrite_warn)
 
@@ -199,6 +198,34 @@ class BatchProcessorTab(QWidget):
         self.resize_stack.addWidget(exact_page)
 
         lay.addWidget(self.resize_stack)
+
+        # ── Crop row (merged from former Crop card) ────────────────────────
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(BodyLabel("Crop:"))
+        self.combo_crop = ComboBox()
+        crop_items = list(CROP_PRESETS.keys()) + ["Custom W:H"]
+        self.combo_crop.addItems(crop_items)
+        self.combo_crop.currentTextChanged.connect(self._sync_crop_custom_visibility)
+        crop_row.addWidget(self.combo_crop)
+        crop_row.addStretch()
+        lay.addLayout(crop_row)
+
+        self.crop_custom_row = QWidget()
+        ccrow = QHBoxLayout(self.crop_custom_row)
+        ccrow.setContentsMargins(0, 0, 0, 0)
+        self.spin_crop_w = SpinBox()
+        self.spin_crop_w.setRange(1, 100)
+        self.spin_crop_w.setValue(5)
+        self.spin_crop_h = SpinBox()
+        self.spin_crop_h.setRange(1, 100)
+        self.spin_crop_h.setValue(7)
+        ccrow.addWidget(BodyLabel("W:"))
+        ccrow.addWidget(self.spin_crop_w)
+        ccrow.addWidget(BodyLabel("H:"))
+        ccrow.addWidget(self.spin_crop_h)
+        ccrow.addStretch()
+        lay.addWidget(self.crop_custom_row)
+
         root.addWidget(card)
 
     def _sync_resize_visibility(self, *_):
@@ -220,36 +247,6 @@ class BatchProcessorTab(QWidget):
             return "exact"
         return "none"
 
-    # ── Crop ──────────────────────────────────────────────────────────────
-    def _build_crop_card(self, root):
-        card, lay = _make_card("Crop")
-        row = QHBoxLayout()
-        row.addWidget(BodyLabel("Ratio:"))
-        self.combo_crop = ComboBox()
-        crop_items = list(CROP_PRESETS.keys()) + ["Custom W:H"]
-        self.combo_crop.addItems(crop_items)
-        self.combo_crop.currentTextChanged.connect(self._sync_crop_custom_visibility)
-        row.addWidget(self.combo_crop)
-        row.addStretch()
-        lay.addLayout(row)
-
-        self.crop_custom_row = QWidget()
-        ccrow = QHBoxLayout(self.crop_custom_row)
-        ccrow.setContentsMargins(0, 0, 0, 0)
-        self.spin_crop_w = SpinBox()
-        self.spin_crop_w.setRange(1, 100)
-        self.spin_crop_w.setValue(5)
-        self.spin_crop_h = SpinBox()
-        self.spin_crop_h.setRange(1, 100)
-        self.spin_crop_h.setValue(7)
-        ccrow.addWidget(BodyLabel("W:"))
-        ccrow.addWidget(self.spin_crop_w)
-        ccrow.addWidget(BodyLabel("H:"))
-        ccrow.addWidget(self.spin_crop_h)
-        ccrow.addStretch()
-        lay.addWidget(self.crop_custom_row)
-        root.addWidget(card)
-
     def _sync_crop_custom_visibility(self, *_):
         self.crop_custom_row.setVisible(self.combo_crop.currentText() == "Custom W:H")
 
@@ -267,17 +264,26 @@ class BatchProcessorTab(QWidget):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(6)
 
+        now = QDateTime.currentDateTime()
+
         grid.addWidget(BodyLabel("Created date:"), 0, 0)
-        self.dp_created = DatePicker()
-        self.tp_created = TimePicker()
-        grid.addWidget(self.dp_created, 0, 1)
-        grid.addWidget(self.tp_created, 0, 2)
+        self.dt_created = QDateTimeEdit()
+        self.dt_created.setCalendarPopup(True)
+        self.dt_created.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt_created.setDateTime(now)
+        self.dt_created.setStyleSheet("QDateTimeEdit { padding: 6px 8px; }")
+        grid.addWidget(self.dt_created, 0, 1)
 
         grid.addWidget(BodyLabel("Modified date:"), 1, 0)
-        self.dp_modified = DatePicker()
-        self.tp_modified = TimePicker()
-        grid.addWidget(self.dp_modified, 1, 1)
-        grid.addWidget(self.tp_modified, 1, 2)
+        self.dt_modified = QDateTimeEdit()
+        self.dt_modified.setCalendarPopup(True)
+        self.dt_modified.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt_modified.setDateTime(now)
+        self.dt_modified.setStyleSheet("QDateTimeEdit { padding: 6px 8px; }")
+        grid.addWidget(self.dt_modified, 1, 1)
+
+        # Mirror Created → Modified live when "Same date for both" is on.
+        self.dt_created.dateTimeChanged.connect(self._on_created_dt_changed)
 
         lay.addLayout(grid)
 
@@ -290,39 +296,57 @@ class BatchProcessorTab(QWidget):
         )
         lay.addWidget(self.cb_write_exif)
 
-        note = BodyLabel(
+        self.lbl_metadata_note = CaptionLabel(
             "Note: Created date can only be modified on Windows. "
             "On macOS, only Modified date is changed."
         )
-        note.setStyleSheet("color: gray; font-style: italic;")
-        note.setWordWrap(True)
-        lay.addWidget(note)
+        # Italic only; let Fluent's CaptionLabel theming pick a sensible color
+        # for both Light and Dark.
+        self.lbl_metadata_note.setStyleSheet("font-style: italic;")
+        self.lbl_metadata_note.setWordWrap(True)
+        lay.addWidget(self.lbl_metadata_note)
 
         root.addWidget(card)
 
     def _on_same_date_toggled(self, checked):
         # When checked, the modified picker mirrors the created picker and
         # is disabled.
-        self.dp_modified.setEnabled(not checked)
-        self.tp_modified.setEnabled(not checked)
+        self.dt_modified.setEnabled(not checked)
         if checked:
             try:
-                self.dp_modified.setDate(self.dp_created.getDate())
-                self.tp_modified.setTime(self.tp_created.getTime())
+                self.dt_modified.setDateTime(self.dt_created.dateTime())
             except Exception:
                 pass
 
-    def _read_datetime(self, dp: DatePicker, tp: TimePicker) -> datetime | None:
+    def _on_created_dt_changed(self, qdt: QDateTime):
+        """Keep dependent pickers in sync with the Created datetime."""
+        if getattr(self, "cb_same_date", None) is not None and \
+                self.cb_same_date.isChecked():
+            try:
+                self.dt_modified.setDateTime(qdt)
+            except Exception:
+                pass
+        if getattr(self, "cb_wm_same_as_metadata", None) is not None and \
+                self.cb_wm_same_as_metadata.isChecked() and \
+                getattr(self, "dt_watermark", None) is not None:
+            try:
+                self.dt_watermark.setDateTime(qdt)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _qdt_to_pydt(qdt: QDateTime) -> datetime | None:
+        if qdt is None or not qdt.isValid():
+            return None
         try:
-            qd = dp.getDate()
-            qt = tp.getTime()
+            return qdt.toPyDateTime()
         except Exception:
-            return None
-        if qd is None or not qd.isValid():
-            return None
-        t = qt if (qt is not None and qt.isValid()) else QTime(0, 0)
-        return datetime(qd.year(), qd.month(), qd.day(),
-                        t.hour(), t.minute(), t.second())
+            d = qdt.date()
+            t = qdt.time()
+            if not d.isValid():
+                return None
+            return datetime(d.year(), d.month(), d.day(),
+                            t.hour(), t.minute(), t.second())
 
     # ── Watermark ─────────────────────────────────────────────────────────
     def _build_watermark_card(self, root):
@@ -367,7 +391,7 @@ class BatchProcessorTab(QWidget):
         lay.setContentsMargins(0, 6, 0, 0)
         lay.setSpacing(6)
 
-        # Format
+        # Format (its own row — long combo benefits from full width)
         row_fmt = QHBoxLayout()
         row_fmt.addWidget(BodyLabel("Format:"))
         self.combo_date_format = ComboBox()
@@ -376,95 +400,105 @@ class BatchProcessorTab(QWidget):
         row_fmt.addWidget(self.combo_date_format, 1)
         lay.addLayout(row_fmt)
 
-        # Watermark date
+        # Watermark date — single QDateTimeEdit
         row_date = QHBoxLayout()
         row_date.addWidget(BodyLabel("Watermark date:"))
-        self.dp_wm = DatePicker()
-        self.tp_wm = TimePicker()
-        row_date.addWidget(self.dp_wm)
-        row_date.addWidget(self.tp_wm)
-        row_date.addStretch()
+        self.dt_watermark = QDateTimeEdit()
+        self.dt_watermark.setCalendarPopup(True)
+        self.dt_watermark.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.dt_watermark.setDateTime(QDateTime.currentDateTime())
+        self.dt_watermark.setStyleSheet("QDateTimeEdit { padding: 6px 8px; }")
+        row_date.addWidget(self.dt_watermark, 1)
         lay.addLayout(row_date)
 
         self.cb_wm_same_as_metadata = CheckBox("Same as metadata date")
         self.cb_wm_same_as_metadata.toggled.connect(self._on_wm_same_as_metadata_toggled)
         lay.addWidget(self.cb_wm_same_as_metadata)
 
-        # Color
-        color_row = QHBoxLayout()
-        color_row.addWidget(BodyLabel("Color:"))
+        # ── Paired rows: Color | Font ─────────────────────────────────────
+        cf_grid = QGridLayout()
+        cf_grid.setContentsMargins(0, 0, 0, 0)
+        cf_grid.setHorizontalSpacing(12)
+        cf_grid.setVerticalSpacing(6)
+
+        # Color (label + combo + swatch)
+        cf_grid.addWidget(BodyLabel("Color:"), 0, 0)
+        color_cell = QWidget()
+        color_inner = QHBoxLayout(color_cell)
+        color_inner.setContentsMargins(0, 0, 0, 0)
+        color_inner.setSpacing(6)
         self.combo_color = ComboBox()
         self.combo_color.addItems(list(COLOR_PRESETS.keys()) + ["Custom..."])
         self.combo_color.currentTextChanged.connect(self._on_color_changed)
-        color_row.addWidget(self.combo_color)
+        color_inner.addWidget(self.combo_color, 1)
         self.lbl_color_swatch = BodyLabel("")
         self.lbl_color_swatch.setFixedSize(28, 18)
         self._update_color_swatch()
-        color_row.addWidget(self.lbl_color_swatch)
-        color_row.addStretch()
-        lay.addLayout(color_row)
+        color_inner.addWidget(self.lbl_color_swatch)
+        cf_grid.addWidget(color_cell, 0, 1)
 
         # Font
-        font_row = QHBoxLayout()
-        font_row.addWidget(BodyLabel("Font:"))
+        cf_grid.addWidget(BodyLabel("Font:"), 0, 2)
         self.combo_font = ComboBox()
         self.combo_font.addItems(FONT_CHOICES)
-        font_row.addWidget(self.combo_font)
-        font_row.addStretch()
-        lay.addLayout(font_row)
+        cf_grid.addWidget(self.combo_font, 0, 3)
 
-        # Font size
-        size_row = QHBoxLayout()
-        size_row.addWidget(BodyLabel("Size (% of image width):"))
+        # ── Paired rows: Position | Margin ────────────────────────────────
+        cf_grid.addWidget(BodyLabel("Position:"), 1, 0)
+        self.combo_position = ComboBox()
+        self.combo_position.addItems(POSITIONS)
+        cf_grid.addWidget(self.combo_position, 1, 1)
+
+        cf_grid.addWidget(BodyLabel("Margin (px):"), 1, 2)
+        self.spin_margin = SpinBox()
+        self.spin_margin.setRange(0, 200)
+        self.spin_margin.setValue(20)
+        cf_grid.addWidget(self.spin_margin, 1, 3)
+
+        # ── Paired rows: Size | Opacity (two sliders side-by-side) ────────
+        cf_grid.addWidget(BodyLabel("Size (%):"), 2, 0)
+        size_cell = QWidget()
+        size_inner = QHBoxLayout(size_cell)
+        size_inner.setContentsMargins(0, 0, 0, 0)
+        size_inner.setSpacing(6)
         self.slider_font_size = Slider(Qt.Horizontal)
         self.slider_font_size.setRange(1, 20)
         self.slider_font_size.setValue(5)
-        self.slider_font_size.setMinimumWidth(180)
+        self.slider_font_size.setMinimumWidth(120)
         self.lbl_font_size = CaptionLabel("5%")
         self.slider_font_size.valueChanged.connect(
             lambda v: self.lbl_font_size.setText(f"{v}%")
         )
-        size_row.addWidget(self.slider_font_size, 1)
-        size_row.addWidget(self.lbl_font_size)
-        lay.addLayout(size_row)
+        size_inner.addWidget(self.slider_font_size, 1)
+        size_inner.addWidget(self.lbl_font_size)
+        cf_grid.addWidget(size_cell, 2, 1)
 
-        # Position
-        pos_row = QHBoxLayout()
-        pos_row.addWidget(BodyLabel("Position:"))
-        self.combo_position = ComboBox()
-        self.combo_position.addItems(POSITIONS)
-        pos_row.addWidget(self.combo_position)
-        pos_row.addStretch()
-        lay.addLayout(pos_row)
-
-        # Shadow
-        self.cb_shadow = CheckBox("Add shadow/outline")
-        lay.addWidget(self.cb_shadow)
-
-        # Opacity
-        op_row = QHBoxLayout()
-        op_row.addWidget(BodyLabel("Opacity:"))
+        cf_grid.addWidget(BodyLabel("Opacity:"), 2, 2)
+        op_cell = QWidget()
+        op_inner = QHBoxLayout(op_cell)
+        op_inner.setContentsMargins(0, 0, 0, 0)
+        op_inner.setSpacing(6)
         self.slider_opacity = Slider(Qt.Horizontal)
         self.slider_opacity.setRange(0, 100)
         self.slider_opacity.setValue(100)
-        self.slider_opacity.setMinimumWidth(180)
+        self.slider_opacity.setMinimumWidth(120)
         self.lbl_opacity = CaptionLabel("100%")
         self.slider_opacity.valueChanged.connect(
             lambda v: self.lbl_opacity.setText(f"{v}%")
         )
-        op_row.addWidget(self.slider_opacity, 1)
-        op_row.addWidget(self.lbl_opacity)
-        lay.addLayout(op_row)
+        op_inner.addWidget(self.slider_opacity, 1)
+        op_inner.addWidget(self.lbl_opacity)
+        cf_grid.addWidget(op_cell, 2, 3)
 
-        # Margin
-        margin_row = QHBoxLayout()
-        margin_row.addWidget(BodyLabel("Margin (px):"))
-        self.spin_margin = SpinBox()
-        self.spin_margin.setRange(0, 200)
-        self.spin_margin.setValue(20)
-        margin_row.addWidget(self.spin_margin)
-        margin_row.addStretch()
-        lay.addLayout(margin_row)
+        # Let combos / sliders stretch in their columns
+        cf_grid.setColumnStretch(1, 1)
+        cf_grid.setColumnStretch(3, 1)
+
+        lay.addLayout(cf_grid)
+
+        # Shadow on its own row (single checkbox)
+        self.cb_shadow = CheckBox("Add shadow/outline")
+        lay.addWidget(self.cb_shadow)
 
         return page
 
@@ -484,54 +518,61 @@ class BatchProcessorTab(QWidget):
         path_row.addWidget(self.btn_browse_wm_image)
         lay.addLayout(path_row)
 
-        # Size
-        size_row = QHBoxLayout()
-        size_row.addWidget(BodyLabel("Size (% of image width):"))
+        img_grid = QGridLayout()
+        img_grid.setContentsMargins(0, 0, 0, 0)
+        img_grid.setHorizontalSpacing(12)
+        img_grid.setVerticalSpacing(6)
+
+        # ── Paired row: Size | Opacity ────────────────────────────────────
+        img_grid.addWidget(BodyLabel("Size (%):"), 0, 0)
+        size_cell = QWidget()
+        size_inner = QHBoxLayout(size_cell)
+        size_inner.setContentsMargins(0, 0, 0, 0)
+        size_inner.setSpacing(6)
         self.slider_wm_image_size = Slider(Qt.Horizontal)
         self.slider_wm_image_size.setRange(1, 50)
         self.slider_wm_image_size.setValue(15)
-        self.slider_wm_image_size.setMinimumWidth(180)
+        self.slider_wm_image_size.setMinimumWidth(120)
         self.lbl_wm_image_size = CaptionLabel("15%")
         self.slider_wm_image_size.valueChanged.connect(
             lambda v: self.lbl_wm_image_size.setText(f"{v}%")
         )
-        size_row.addWidget(self.slider_wm_image_size, 1)
-        size_row.addWidget(self.lbl_wm_image_size)
-        lay.addLayout(size_row)
+        size_inner.addWidget(self.slider_wm_image_size, 1)
+        size_inner.addWidget(self.lbl_wm_image_size)
+        img_grid.addWidget(size_cell, 0, 1)
 
-        # Opacity (shared concept; separate slider so date/image stay independent)
-        op_row = QHBoxLayout()
-        op_row.addWidget(BodyLabel("Opacity:"))
+        img_grid.addWidget(BodyLabel("Opacity:"), 0, 2)
+        op_cell = QWidget()
+        op_inner = QHBoxLayout(op_cell)
+        op_inner.setContentsMargins(0, 0, 0, 0)
+        op_inner.setSpacing(6)
         self.slider_wm_image_opacity = Slider(Qt.Horizontal)
         self.slider_wm_image_opacity.setRange(0, 100)
         self.slider_wm_image_opacity.setValue(100)
-        self.slider_wm_image_opacity.setMinimumWidth(180)
+        self.slider_wm_image_opacity.setMinimumWidth(120)
         self.lbl_wm_image_opacity = CaptionLabel("100%")
         self.slider_wm_image_opacity.valueChanged.connect(
             lambda v: self.lbl_wm_image_opacity.setText(f"{v}%")
         )
-        op_row.addWidget(self.slider_wm_image_opacity, 1)
-        op_row.addWidget(self.lbl_wm_image_opacity)
-        lay.addLayout(op_row)
+        op_inner.addWidget(self.slider_wm_image_opacity, 1)
+        op_inner.addWidget(self.lbl_wm_image_opacity)
+        img_grid.addWidget(op_cell, 0, 3)
 
-        # Position
-        pos_row = QHBoxLayout()
-        pos_row.addWidget(BodyLabel("Position:"))
+        # ── Paired row: Position | Margin ─────────────────────────────────
+        img_grid.addWidget(BodyLabel("Position:"), 1, 0)
         self.combo_wm_image_position = ComboBox()
         self.combo_wm_image_position.addItems(POSITIONS)
-        pos_row.addWidget(self.combo_wm_image_position)
-        pos_row.addStretch()
-        lay.addLayout(pos_row)
+        img_grid.addWidget(self.combo_wm_image_position, 1, 1)
 
-        # Margin
-        margin_row = QHBoxLayout()
-        margin_row.addWidget(BodyLabel("Margin (px):"))
+        img_grid.addWidget(BodyLabel("Margin (px):"), 1, 2)
         self.spin_wm_image_margin = SpinBox()
         self.spin_wm_image_margin.setRange(0, 200)
         self.spin_wm_image_margin.setValue(20)
-        margin_row.addWidget(self.spin_wm_image_margin)
-        margin_row.addStretch()
-        lay.addLayout(margin_row)
+        img_grid.addWidget(self.spin_wm_image_margin, 1, 3)
+
+        img_grid.setColumnStretch(1, 1)
+        img_grid.setColumnStretch(3, 1)
+        lay.addLayout(img_grid)
 
         return page
 
@@ -544,8 +585,14 @@ class BatchProcessorTab(QWidget):
             self.le_wm_image.setText(path)
 
     def _on_wm_same_as_metadata_toggled(self, checked):
-        self.dp_wm.setEnabled(not checked)
-        self.tp_wm.setEnabled(not checked)
+        if not hasattr(self, "dt_watermark"):
+            return
+        self.dt_watermark.setEnabled(not checked)
+        if checked:
+            try:
+                self.dt_watermark.setDateTime(self.dt_created.dateTime())
+            except Exception:
+                pass
 
     def _on_color_changed(self, text):
         if text == "Custom...":
@@ -601,11 +648,11 @@ class BatchProcessorTab(QWidget):
             "crop_ratio": self._get_crop_ratio(),
         }
 
-        created_dt = self._read_datetime(self.dp_created, self.tp_created)
+        created_dt = self._qdt_to_pydt(self.dt_created.dateTime())
         if self.cb_same_date.isChecked():
             modified_dt = created_dt
         else:
-            modified_dt = self._read_datetime(self.dp_modified, self.tp_modified)
+            modified_dt = self._qdt_to_pydt(self.dt_modified.dateTime())
         cfg["created_dt"] = created_dt
         cfg["modified_dt"] = modified_dt
         cfg["write_exif"] = self.cb_write_exif.isChecked()
@@ -616,7 +663,7 @@ class BatchProcessorTab(QWidget):
             if self.cb_wm_same_as_metadata.isChecked():
                 cfg["wm_date_dt"] = created_dt
             else:
-                cfg["wm_date_dt"] = self._read_datetime(self.dp_wm, self.tp_wm)
+                cfg["wm_date_dt"] = self._qdt_to_pydt(self.dt_watermark.dateTime())
             cfg["wm_date_format_index"] = self.combo_date_format.currentIndex()
             cfg["wm_color"] = self._wm_color
             cfg["wm_font"] = self.combo_font.currentText()
@@ -689,6 +736,24 @@ class BatchProcessorTab(QWidget):
         if total > 0:
             self.progress.setValue(int(current / total * 100))
         self.lbl_status.setText(f"Processing {current}/{total}: {filename}")
+
+    # ── Theme handling ────────────────────────────────────────────────────
+    def _apply_overwrite_warn_style(self):
+        """Theme-aware red for the overwrite warning."""
+        if not hasattr(self, "lbl_overwrite_warn"):
+            return
+        # Slightly brighter red on dark theme for legibility.
+        color = "#ff6b6b" if isDarkTheme() else "#e74c3c"
+        self.lbl_overwrite_warn.setStyleSheet(f"color: {color};")
+
+    def refresh_theme(self):
+        """Public API: re-apply per-widget themed styles after a theme switch.
+
+        Called by MainWindow._on_theme_changed when Light/Dark toggles.
+        """
+        self._apply_overwrite_warn_style()
+        # Force a repaint pass on the tab and its children
+        self.update()
 
     def _on_finished(self, processed, error_count, errors):
         self.btn_process.setEnabled(True)
