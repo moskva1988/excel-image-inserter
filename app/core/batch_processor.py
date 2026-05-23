@@ -159,7 +159,16 @@ class BatchProcessorWorker(QThread):
                 self._process_one(src, dst)
                 processed += 1
             except Exception as e:  # keep going on per-file errors
+                import traceback as _tb
+                tb_str = _tb.format_exc()
                 errors.append((src.name, str(e)))
+                # Full traceback to log file
+                try:
+                    import sys as _sys
+                    _sys.stderr.write(f"\n[BATCH ERROR] {src.name}: {type(e).__name__}: {e}\n{tb_str}\n")
+                    _sys.stderr.flush()
+                except Exception:
+                    pass
 
         self.finished.emit(processed, len(errors), errors)
 

@@ -64,9 +64,9 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
-      - name: Build .exe
+      - name: Build .exe (DEBUG: --console for stdout/stderr capture)
         run: |
-          pyinstaller --onefile --windowed --name "ExcelImageInserter" --icon icon.ico --collect-all qfluentwidgets --hidden-import=win32file --hidden-import=win32con --hidden-import=pywintypes --hidden-import=piexif main.py
+          pyinstaller --onefile --console --name "ExcelImageInserter" --icon icon.ico --collect-all qfluentwidgets --hidden-import=win32file --hidden-import=win32con --hidden-import=pywintypes --hidden-import=piexif main.py
       - uses: actions/upload-artifact@v4
         with:
           name: windows-build

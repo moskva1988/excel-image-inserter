@@ -1,7 +1,29 @@
 #!/usr/bin/env python3
 """Excel Image Inserter — PyQt5 utility for batch-inserting images into Excel."""
 
+import os
 import sys
+import tempfile
+import traceback as _tb
+
+# Debug logging: redirect stdout/stderr to file in OS temp dir + capture unhandled exceptions
+_LOG_PATH = os.path.join(tempfile.gettempdir(), "excel-image-inserter.log")
+try:
+    _log_fh = open(_LOG_PATH, "a", encoding="utf-8", buffering=1)
+    _log_fh.write(f"\n{'='*60}\nApp start: {__import__('datetime').datetime.now().isoformat()}\nLog: {_LOG_PATH}\n{'='*60}\n")
+    sys.stdout = _log_fh
+    sys.stderr = _log_fh
+except Exception:
+    pass
+
+def _excepthook(exc_type, exc_value, exc_tb):
+    msg = "".join(_tb.format_exception(exc_type, exc_value, exc_tb))
+    try:
+        sys.stderr.write(f"\nUNHANDLED EXCEPTION:\n{msg}\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+sys.excepthook = _excepthook
 
 from PyQt5.QtCore import Qt, QSettings
 from PyQt5.QtWidgets import QApplication
