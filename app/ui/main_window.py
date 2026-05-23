@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         self.combo_active_group.blockSignals(True)
         self.combo_active_group.clear()
         for gi, group in enumerate(self.groups):
-            self.combo_active_group.addItem(group["title"], gi)
+            self.combo_active_group.addItem(group["title"], userData=gi)
         if 0 <= prev_idx < len(self.groups):
             self.combo_active_group.setCurrentIndex(prev_idx)
         elif self.groups:
